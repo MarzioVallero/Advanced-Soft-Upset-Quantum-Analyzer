@@ -160,9 +160,11 @@ cython_debug/
 #.idea/
 
 
-./plots
-./results
-./cuQuantum*
-./circuits
-cuQuantum*
+plots
+results
+cuQuantum
+cuQuantumApp23.06-benchmark
+*.sif
+circuits
+*.png
 *.sh
