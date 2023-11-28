@@ -159,7 +159,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-
 plots
 results
 cuQuantum
@@ -168,3 +167,5 @@ cuQuantumApp23.06-benchmark
 circuits
 *.png
 *.sh
+*.err
+*.out
