@@ -101,7 +101,7 @@ dependencies:
       - pytz==2023.3.post1
       - qiskit==0.44.2
       - qiskit-aer==0.13.0
-      - qiskit-aer-gpu==0.12.2
+      - qiskit-aer-gpu==0.13.0
       - qiskit-algorithms==0.2.1
       - qiskit-ibm-provider==0.7.1
       - qiskit-terra==0.25.2.1
