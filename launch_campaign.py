@@ -84,11 +84,11 @@ def main():
     device_backend = FakeJakarta()
     # device_backend = FakeSycamore25()
 
-    circ = QuantumCircuit(25, 25)
-    circ.x(range(25))
-    circ.measure(range(25), range(25))
-    circ.name = "Google Experiment 25 qubits"
-    circuits.append(circ)
+    # circ = QuantumCircuit(25, 25)
+    # circ.x(range(25))
+    # circ.measure(range(25), range(25))
+    # circ.name = "Google Experiment 25 qubits"
+    # circuits.append(circ)
     circuits = [circ]
 
     ts = time()
@@ -104,14 +104,23 @@ def main():
     log(f"Transpilation done ({time() - ts} elapsed)")
 
     # Transient simulation controls
+    injection_points = [0]
     transient_error_function = reset_to_zero
     spread_depth = 6
     damping_function = exponential_damping
     apply_transpiler = False
     noiseless = False
     transient_error_duration_ns = 25000000
-    n_quantised_steps = 10
-    processes = 1
+    n_quantised_steps = 100
+
+    max_qubits = 27
+    max_cores = 8
+    gpu_limit = int( (64*1024**3)/((2**max_qubits)*8) )
+    use_gpu = True
+
+    processes = min(2*max_cores, gpu_limit)
+    if not use_gpu and (processes > n_quantised_steps or processes > max_cores):
+        processes = min(n_quantised_steps+1, max_cores)
 
     # If you want to make a shot-level simulation, use this only with a single circuit at a time!
     # shot_time_per_circuit = get_shot_execution_time_ns(circuits, device_backend=device_backend, apply_transpiler=apply_transpiler)
@@ -120,6 +129,7 @@ def main():
     # Run transient injection simulation
     result_dict = run_transient_injection(circuits, 
                                           device_backend=device_backend,
+                                          injection_points=injection_points,
                                           transient_error_function = transient_error_function,
                                           spread_depth = spread_depth,
                                           damping_function = damping_function,
@@ -135,23 +145,5 @@ def main():
     plot_data(result_dict, count_collapses_error)
     log(f"Data processed ({time() - ts} elapsed)")
 
-    # TODO: Sycamore backend
-    # TODO: Test surface codes:
-        # - Surface code 3,3 XZZX
-        # - Surface code 5,5 XZZX
-        # - Surface code 3,3 XXZZ
-        # - Surface code 5,5 XXZZ
-
 if __name__ == "__main__":
     main()
-
-#%%
-# import dill
-# from injector_par import *
-# result_dict_name = f"results/campaign_2023-11-24 14:28:38.054834"
-# with open(result_dict_name, 'rb') as pickle_file:
-#     result_dict = dill.load(pickle_file)
-
-# # filter_dict(result_dict, [3, 5])
-# plot_data(result_dict, count_collapses_error)
-# %%

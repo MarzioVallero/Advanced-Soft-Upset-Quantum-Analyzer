@@ -52,6 +52,10 @@ t_circ = transpile(circ, device_backend, scheduling_method='asap',
             initial_layout=list(range(len(circ.qubits))), seed_transpiler=42)
 
 qasm_sim = AerSimulator(noise_model=noise_model, basis_gates=noise_model.basis_gates)
+try:
+    qasm_sim.set_options(device='GPU')
+except:
+    pass
 probs = qasm_sim.run(t_circ, shots=1024).result()
 print(probs)
 

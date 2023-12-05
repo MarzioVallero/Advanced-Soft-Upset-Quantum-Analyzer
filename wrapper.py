@@ -19,7 +19,9 @@ circuit_name = data["circuit_name"]
 
 for iteration, p in enumerate(probability_per_batch_per_circuits[circuit_name]):
     if iteration == index:
-        inj_result = run_injection_campaing([original_args["circuit"]], original_args["transient_error_function"],
+        inj_result = run_injection_campaing([original_args["circuit"]],
+                                        injection_points=original_args["injection_points"],
+                                        transient_error_function=original_args["transient_error_function"],
                                         root_inj_probability=p,
                                         time_step=int(shots_per_time_batch_per_circuits[circuit_name])*iteration,
                                         spread_depth=original_args["spread_depth"],

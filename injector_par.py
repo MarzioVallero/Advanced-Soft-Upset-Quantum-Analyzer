@@ -20,9 +20,10 @@ import dill, gzip
 import tqdm
 from mycolorpy import colorlist as mcp
 from qiskit import transpile, QuantumCircuit
-from qiskit.providers.fake_provider import FakeJakarta
+from qiskit.providers.fake_provider import FakeJakarta, FakeMumbai
 from qiskit_aer.noise import NoiseModel
 from qiskit.providers.aer import AerSimulator
+from qiskit.providers.fake_provider import ConfigurableFakeBackend
 from qiskit.providers.aer.noise import reset_error, mixed_unitary_error
 from qiskit.circuit.library import RYGate, IGate
 from qiskit.quantum_info.analysis import hellinger_distance, hellinger_fidelity
@@ -30,6 +31,39 @@ from qiskit.quantum_info.analysis import hellinger_distance, hellinger_fidelity
 file_logging = False
 logging_filename = "./qufi.log"
 console_logging = True
+
+def FakeSycamore25():
+    n_qubits = 25
+
+    cmap_sycamore_25 = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 9], [9, 14], [14, 19], [19, 24], [24, 23], [23, 18], [18, 13], [13, 8], [8, 7], [7, 6], [6, 5], [5, 10], [10, 15], [15, 20], [20, 21], [21, 16], [11, 16], [0, 5], [1, 6], [6, 11], [11, 12], [12, 7], [7, 2], [3, 8], [8, 9], [14, 13], [13, 12], [12, 17], [18, 17], [16, 17], [17, 22], [23, 22], [22, 21], [10, 11], [16, 15], [18, 19]]
+    cmap_sycamore_53 = [[0, 5], [5, 1], [1, 6], [6, 2], [2, 7], [7, 14], [14, 8], [8, 3], [3, 9], [9, 4], [4, 10], [10, 16], [16, 9], [9, 15], [15, 8], [5, 11], [11, 17], [17, 23], [23, 29], [29, 35], [35, 41], [41, 47], [41, 48], [48, 42], [42, 49], [49, 43], [43, 50], [50, 44], [44, 51], [51, 45], [45, 52], [52, 46], [46, 40], [40, 45], [45, 39], [39, 44], [44, 38], [38, 43], [43, 37], [37, 42], [42, 36], [36, 41], [36, 29], [29, 24], [24, 17], [17, 12], [12, 5], [12, 6], [6, 13], [13, 7], [12, 18], [18, 13], [13, 19], [19, 14], [14, 20], [20, 15], [15, 21], [21, 16], [16, 22], [22, 28], [28, 21], [21, 27], [27, 20], [20, 26], [26, 19], [19, 25], [25, 18], [18, 24], [24, 30], [30, 25], [25, 31], [31, 26], [26, 32], [32, 27], [27, 33], [33, 28], [28, 34], [34, 40], [40, 33], [33, 39], [39, 32], [32, 38], [38, 31], [31, 37], [37, 30], [30, 36]]
+
+    ibm_device_backend = FakeMumbai()
+
+    qubit_properties_backend = ibm_device_backend.properties()._qubits.items()
+    single_qubit_gates = set(ibm_device_backend.configuration().basis_gates).intersection(NoiseModel()._1qubit_instructions)
+    single_qubit_gates.add("reset")
+    single_qubit_gates.add("measure")
+
+    qubit_t1 = [item[1]["T1"][0] for item in qubit_properties_backend]
+    qubit_t2 = [item[1]["T2"][0] for item in qubit_properties_backend]
+    qubit_frequency = [item[1]["frequency"][0] for item in qubit_properties_backend]
+    qubit_anharmonicity = [item[1]["anharmonicity"][0] for item in qubit_properties_backend]
+    qubit_readout_error = [item[1]["readout_error"][0] for item in qubit_properties_backend]
+    qubit_readout_length = [item[1]["readout_length"] for item in qubit_properties_backend]
+    basis_gates = ibm_device_backend.configuration().basis_gates
+
+    device_backend = ConfigurableFakeBackend(name="FakeSycamore", n_qubits=n_qubits, version=1, 
+                                             coupling_map=cmap_sycamore_25, basis_gates=basis_gates, 
+                                             qubit_t1=qubit_t1, qubit_t2=qubit_t2, qubit_frequency=qubit_frequency, 
+                                             qubit_readout_error=qubit_readout_error, single_qubit_gates=single_qubit_gates, 
+                                             dt=None)
+
+    for q, props in device_backend._properties._qubits.items():
+        if "readout_length" not in props and q in set(range(n_qubits)):
+            props["readout_length"] = qubit_readout_length[q]
+
+    return device_backend
 
 def log(content):
     """Logging wrapper, can redirect both to stdout and a file"""
@@ -183,7 +217,7 @@ def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability
         
     return noise_model
 
-def run_injection_campaing(circuits, transient_error_function, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, apply_transpiler=True, noiseless=False, shots=1024, execution_type="both"):
+def run_injection_campaing(circuits, injection_points=[0], transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, apply_transpiler=True, noiseless=False, shots=1024, execution_type="both"):
     # Select a simulator
     qasm_sim = AerSimulator()
     result = {"fault_model":{}, "jobs":{}}
@@ -267,17 +301,25 @@ def run_injection_campaing(circuits, transient_error_function, root_inj_probabil
                 # result["jobs"][circuit.name][target[0]] = probs.result()
 
                 qasm_sim = AerSimulator(noise_model=target[1], basis_gates=basis_gates)
+                try:
+                    qasm_sim.set_options(device='GPU')
+                except:
+                    pass
                 probs = qasm_sim.run(t_circ, shots=shots).result()
                 result["jobs"][circuit.name][target[0]] = probs
 
             # Execute the circuit with/without noise (depending on target), but with the transient_fault, with respect to each qubit
             if execution_type == "injection" or execution_type != "golden":
-                for inj_index in inj_qubits:
+                for inj_index in injection_points:
                     noise_model = deepcopy(target[1])
                     noise_model.add_basis_gates(["inj_gate"])
                     noise_model = spread_transient_error(noise_model, sssp_dict[inj_index], root_inj_probability, spread_depth, transient_error_function, damping_function)
 
                     qasm_sim = AerSimulator(noise_model=noise_model, basis_gates=noise_model.basis_gates)
+                    try:
+                        qasm_sim.set_options(device='GPU')
+                    except:
+                        pass    
                     probs_with_transient = qasm_sim.run(t_circ, shots=shots).result()
 
                     if target[0] + "_with_transient" not in result["jobs"][circuit.name].keys():
@@ -323,7 +365,7 @@ def get_shot_execution_time_ns(circuits, device_backend=None, apply_transpiler=T
 
     return shot_time_per_circuit
 
-def run_transient_injection(circuits, device_backend=None, transient_error_function = reset_to_zero, spread_depth = 0, damping_function = exponential_damping, apply_transpiler = False, noiseless = True, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1):
+def run_transient_injection(circuits, device_backend=None, injection_points=[0], transient_error_function = reset_to_zero, spread_depth = 0, damping_function = exponential_damping, apply_transpiler = False, noiseless = True, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1):
     data_wrapper = {}
     data_wrapper["injection_results"] = {}
     
@@ -342,15 +384,15 @@ def run_transient_injection(circuits, device_backend=None, transient_error_funct
             time_step = batch*shots_per_time_batch_per_circuits[circuit_name]*shot_time_per_circuit[circuit_name]
             probability = error_probability_decay(time_step, transient_error_duration_ns)
             probability_per_batch_per_circuits[circuit_name].append(probability)
-
-    # op(probability_per_batch_per_circuits)
     
     injection_results = {}
     golden_results = {}
     fault_model = {}
     for circuit in circuits:
         injection_results[circuit.name] = []
-        golden_result = run_injection_campaing([circuit], transient_error_function,
+        golden_result = run_injection_campaing([circuit],
+                                                injection_points,
+                                                transient_error_function,
                                                 spread_depth=spread_depth,
                                                 time_step=0,
                                                 damping_function=damping_function, 
@@ -365,7 +407,7 @@ def run_transient_injection(circuits, device_backend=None, transient_error_funct
             fault_model["transient_error_duration_ns"] = transient_error_duration_ns
 
         data = {}
-        data["args"] = {"circuit":circuit, "transient_error_function":transient_error_function, "spread_depth":spread_depth, "damping_function":damping_function, "device_backend":device_backend, "apply_transpiler":apply_transpiler, "noiseless":noiseless, "n_quantised_steps":n_quantised_steps}
+        data["args"] = {"circuit":circuit, "injection_points":injection_points, "transient_error_function":transient_error_function, "spread_depth":spread_depth, "damping_function":damping_function, "device_backend":device_backend, "apply_transpiler":apply_transpiler, "noiseless":noiseless, "n_quantised_steps":n_quantised_steps}
         data["probability_per_batch_per_circuits"] = probability_per_batch_per_circuits
         data["shots_per_time_batch_per_circuits"] = shots_per_time_batch_per_circuits
         data["circuit_name"] = circuit.name
@@ -377,9 +419,6 @@ def run_transient_injection(circuits, device_backend=None, transient_error_funct
             mkdir(dirname(data_name))
         with open(data_name, 'wb') as handle:
             dill.dump(data, handle, protocol=dill.HIGHEST_PROTOCOL)
-
-        if processes > n_quantised_steps or processes > cpu_count():
-            processes = min(n_quantised_steps+1, cpu_count())
 
         proc_list = []
         probs_circ = enumerate(probability_per_batch_per_circuits[circuit.name])
