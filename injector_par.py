@@ -189,10 +189,9 @@ def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability
             target_instructions.append("inj_gate")
             noise_model.add_quantum_error(transient_error, instructions=target_instructions, qubits=[path[-1]], warnings=False)
 
-            # BUG
-            if len(path) == 2:
+            if len(path) >= 2:
                 target_instructions_2q = list(noise_model._2qubit_instructions.intersection(noise_model.basis_gates))
-                two_qubit_targets = (path[0], path[1])
+                two_qubit_targets = (path[-2], path[-1])
                 noise_model.add_quantum_error(transient_error.tensor(transient_error), instructions=target_instructions_2q, qubits=two_qubit_targets, warnings=False)
 
     return noise_model
