@@ -6,7 +6,7 @@ from multiprocessing import Pool, cpu_count
 from concurrent import futures
 from itertools import repeat
 from more_itertools import chunked
-from time import time
+from time import time, sleep
 from datetime import datetime
 from objprint import op
 from math import exp, pi
@@ -23,6 +23,7 @@ from qiskit import transpile, QuantumCircuit
 from qiskit.providers.fake_provider import FakeJakarta, FakeMumbai
 from qiskit_aer.noise import NoiseModel
 from qiskit.providers.aer import AerSimulator
+from qiskit_aer.noise.device.parameters import thermal_relaxation_values, readout_error_values
 from qiskit.providers.fake_provider import ConfigurableFakeBackend
 from qiskit.providers.aer.noise import reset_error, mixed_unitary_error
 from qiskit.circuit.library import RYGate, IGate
@@ -34,36 +35,45 @@ console_logging = True
 
 def FakeSycamore25():
     n_qubits = 25
-
     cmap_sycamore_25 = [[0, 1], [1, 2], [2, 3], [3, 4], [4, 9], [9, 14], [14, 19], [19, 24], [24, 23], [23, 18], [18, 13], [13, 8], [8, 7], [7, 6], [6, 5], [5, 10], [10, 15], [15, 20], [20, 21], [21, 16], [11, 16], [0, 5], [1, 6], [6, 11], [11, 12], [12, 7], [7, 2], [3, 8], [8, 9], [14, 13], [13, 12], [12, 17], [18, 17], [16, 17], [17, 22], [23, 22], [22, 21], [10, 11], [16, 15], [18, 19]]
-    cmap_sycamore_53 = [[0, 5], [5, 1], [1, 6], [6, 2], [2, 7], [7, 14], [14, 8], [8, 3], [3, 9], [9, 4], [4, 10], [10, 16], [16, 9], [9, 15], [15, 8], [5, 11], [11, 17], [17, 23], [23, 29], [29, 35], [35, 41], [41, 47], [41, 48], [48, 42], [42, 49], [49, 43], [43, 50], [50, 44], [44, 51], [51, 45], [45, 52], [52, 46], [46, 40], [40, 45], [45, 39], [39, 44], [44, 38], [38, 43], [43, 37], [37, 42], [42, 36], [36, 41], [36, 29], [29, 24], [24, 17], [17, 12], [12, 5], [12, 6], [6, 13], [13, 7], [12, 18], [18, 13], [13, 19], [19, 14], [14, 20], [20, 15], [15, 21], [21, 16], [16, 22], [22, 28], [28, 21], [21, 27], [27, 20], [20, 26], [26, 19], [19, 25], [25, 18], [18, 24], [24, 30], [30, 25], [25, 31], [31, 26], [26, 32], [32, 27], [27, 33], [33, 28], [28, 34], [34, 40], [40, 33], [33, 39], [39, 32], [32, 38], [38, 31], [31, 37], [37, 30], [30, 36]]
-
     ibm_device_backend = FakeMumbai()
 
-    qubit_properties_backend = ibm_device_backend.properties()._qubits.items()
+    qubit_properties_backend = ibm_device_backend.properties()
     single_qubit_gates = set(ibm_device_backend.configuration().basis_gates).intersection(NoiseModel()._1qubit_instructions)
     single_qubit_gates.add("reset")
-    single_qubit_gates.add("measure")
+    # single_qubit_gates.add("measure")
 
-    qubit_t1 = [item[1]["T1"][0] for item in qubit_properties_backend]
-    qubit_t2 = [item[1]["T2"][0] for item in qubit_properties_backend]
-    qubit_frequency = [item[1]["frequency"][0] for item in qubit_properties_backend]
-    qubit_anharmonicity = [item[1]["anharmonicity"][0] for item in qubit_properties_backend]
-    qubit_readout_error = [item[1]["readout_error"][0] for item in qubit_properties_backend]
-    qubit_readout_length = [item[1]["readout_length"] for item in qubit_properties_backend]
+    qubit_t1 = [item[0] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_t2 = [item[1] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_frequency = [item[2] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_readout_error = [item[0] for q_index, item in enumerate(readout_error_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_readout_length = [item[1]["readout_length"] for item in qubit_properties_backend._qubits.items()]
+    
     basis_gates = ibm_device_backend.configuration().basis_gates
 
     device_backend = ConfigurableFakeBackend(name="FakeSycamore", n_qubits=n_qubits, version=1, 
                                              coupling_map=cmap_sycamore_25, basis_gates=basis_gates, 
-                                             qubit_t1=qubit_t1, qubit_t2=qubit_t2, qubit_frequency=qubit_frequency, 
-                                             qubit_readout_error=qubit_readout_error, single_qubit_gates=single_qubit_gates, 
+                                             qubit_t1=qubit_t1, qubit_t2=qubit_t2,
+                                             qubit_frequency=qubit_frequency, 
+                                             qubit_readout_error=qubit_readout_error,
+                                             single_qubit_gates=single_qubit_gates, 
                                              dt=None)
 
     for q, props in device_backend._properties._qubits.items():
         if "readout_length" not in props and q in set(range(n_qubits)):
             props["readout_length"] = qubit_readout_length[q]
+    for g, g_props in deepcopy(device_backend._properties._gates).items():
+        for q, q_props in g_props.items():
+            if len(q) > 1:
+                device_backend._properties._gates[g][(q[1], q[0])] = q_props
 
     return device_backend
+
+def check_for_done(l):
+    for i, p in enumerate(l):
+        if p.poll() is not None:
+            return True, i
+    return False, False
 
 def log(content):
     """Logging wrapper, can redirect both to stdout and a file"""
@@ -77,17 +87,6 @@ def log(content):
 
 def f_wrapped(arg):
     return run_injection_campaing(*arg)  # Unpacks args
-
-# An output bistring is considered correct if it starts with 1
-def percentage_correct_outputs(counts):
-    corrected = 0
-    total = 0
-    for basis, count in counts.items():
-        if basis.startswith("1"):
-            corrected += count
-        total += count
-    
-    return corrected / total
 
 def save_results(results, filename="./results.p.gz"):
     """Save a single/double circuits results object"""
@@ -164,30 +163,6 @@ def valid_inj_qubits(sssp_dict_of_qubits):
         
     return list(set(inj_points))
 
-
-def print_results_dict(results_dict):
-    log(f"\n############ FAULT MODEL USED ############")
-    log(f"Transient error function:\n{results_dict['fault_model']['transient_error_function']}")
-    log(f"Spread depth: {results_dict['fault_model']['spread_depth']}")
-    log(f"Damping function:\n{results_dict['fault_model']['damping_function']}")
-    log(f"Backend noise model used: {results_dict['fault_model']['device_backend'].backend_name if results_dict['fault_model']['device_backend'] is not None else 'None'}")
-    
-    for circuit_name, results in results_dict["jobs"].items():
-        res_keys = list(results.keys())
-        log(f"\n############ RESULTS {circuit_name} ############")
-        if "ideal" in res_keys:
-            log(f"Noiseless golden execution of {circuit_name}:\n{results['ideal'].get_counts()}")
-        if "ideal_with_transient" in res_keys:
-            for inj_qubit, job in results["ideal_with_transient"]:
-                log(f"Noiseless fault execution of {circuit_name} with injection root qubit {inj_qubit}:\n{job.get_counts()}")
-        log(f"")
-        if "noisy" in res_keys:
-            log(f"Noisy golden execution of {circuit_name}:\n{results['noisy'].get_counts()}")
-        if "noisy_with_transient" in res_keys:
-            for inj_qubit, job in results["noisy_with_transient"]:
-                log(f"Noisy fault execution of {circuit_name} with injection root qubit {inj_qubit}:\n{job.get_counts()}")
-                log(f"Time taken: {job.time_taken}")
-
 # Define a dummy inj_gate to be used as an anchor for the NoiseModel
 def get_inj_gate(inj_duration=0.0):
     # gate_qc = QuantumCircuit(1, name='id')
@@ -195,7 +170,6 @@ def get_inj_gate(inj_duration=0.0):
     # inj_gate = gate_qc.to_gate()
     inj_gate = IGate()
     inj_gate.label = "inj_gate"
-    # inj_gate.name = "inj_gate"
     inj_gate.duration = inj_duration
 
     return inj_gate
@@ -214,7 +188,13 @@ def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability
             target_instructions = list(noise_model._1qubit_instructions.intersection(noise_model.basis_gates))
             target_instructions.append("inj_gate")
             noise_model.add_quantum_error(transient_error, instructions=target_instructions, qubits=[path[-1]], warnings=False)
-        
+
+            # BUG
+            if len(path) == 2:
+                target_instructions_2q = list(noise_model._2qubit_instructions.intersection(noise_model.basis_gates))
+                two_qubit_targets = (path[0], path[1])
+                noise_model.add_quantum_error(transient_error.tensor(transient_error), instructions=target_instructions_2q, qubits=two_qubit_targets, warnings=False)
+
     return noise_model
 
 def run_injection_campaing(circuits, injection_points=[0], transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, apply_transpiler=True, noiseless=False, shots=1024, execution_type="both"):
@@ -422,16 +402,23 @@ def run_transient_injection(circuits, device_backend=None, injection_points=[0],
 
         proc_list = []
         probs_circ = enumerate(probability_per_batch_per_circuits[circuit.name])
+        queue = [ ['python3', 'wrapper.py', f'{iteration}', f'{data_name}'] for iteration, p in probs_circ ]
         log(f"Injecting {circuit.name}:")
+
         with tqdm.tqdm(total=len(probability_per_batch_per_circuits[circuit.name])) as pbar:
-            for batch in chunked(probs_circ, processes):
-                for iteration, p in batch:
-                    # system(f"python3 wrapper.py {iteration} '{data_name}'")
-                    proc = Popen(['python3', 'wrapper.py', f'{iteration}', f'{data_name}'])
-                    proc_list.append(proc)
-                for proc in proc_list:
-                    proc.wait()
-                    pbar.update()
+            for process in queue:
+                p = Popen(process)
+                proc_list.append(p)
+                if len(proc_list) == processes:
+                    wait = True
+                    while wait:
+                        done, num = check_for_done(proc_list)
+                        if done:
+                            proc_list.pop(num)
+                            wait = False
+                        else:
+                            sleep(1)
+                pbar.update()
 
     for circuit in circuits:
         res_dirname = f"results/{circuit.name}_{n_quantised_steps}/"
@@ -452,7 +439,7 @@ def relative_error(golden_counts, inj_counts):
     golden_bitstring = max(golden_counts, key=golden_counts.get)
     return 1.0 - (golden_counts[golden_bitstring] / sum(golden_counts.values()))
 
-def count_collapses_error(golden_counts, inj_counts):
+def percentage_collapses_error(golden_counts, inj_counts):
     # Google's test
     zeros_measured = 0
     total_measurements = 0
@@ -461,6 +448,16 @@ def count_collapses_error(golden_counts, inj_counts):
         zeros_measured += zeros_in_bitstring*count
         total_measurements += len(bitstring)*count
     return (zeros_measured / total_measurements)
+
+def count_collapses_error(golden_counts, inj_counts):
+    # Google's test
+    zeros_measured = 0
+    total_measurements = 0
+    for bitstring, count in inj_counts.items():
+        zeros_in_bitstring = bitstring.count("0")
+        zeros_measured += zeros_in_bitstring*count
+        total_measurements += len(bitstring)*count
+    return (zeros_measured / total_measurements) * len(bitstring)
 
 def filter_entry(circuit_data, qubits):
     shot_dict = {}
