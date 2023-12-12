@@ -36,3 +36,5 @@ for iteration, p in enumerate(probability_per_batch_per_circuits[circuit_name]):
             makedirs(dirname(res_filename), exist_ok=True)
         with open(res_filename, 'wb') as handle:
             dill.dump((inj_result[0], inj_result[1]['jobs'][circuit_name]), handle, protocol=dill.HIGHEST_PROTOCOL)
+
+exit(0)

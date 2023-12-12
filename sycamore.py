@@ -1,8 +1,10 @@
 #%%
+from copy import deepcopy
 from qiskit.providers.fake_provider import ConfigurableFakeBackend
 from qiskit.providers.fake_provider import FakeMumbai
 from qiskit.providers.aer import AerSimulator
 from qiskit_aer.noise import NoiseModel
+from qiskit_aer.noise.device.parameters import thermal_relaxation_values, readout_error_values
 from qiskit import transpile, QuantumCircuit
 
 def FakeSycamore25():
@@ -13,28 +15,34 @@ def FakeSycamore25():
 
     ibm_device_backend = FakeMumbai()
 
-    qubit_properties_backend = ibm_device_backend.properties()._qubits.items()
+    qubit_properties_backend = ibm_device_backend.properties()
     single_qubit_gates = set(ibm_device_backend.configuration().basis_gates).intersection(NoiseModel()._1qubit_instructions)
     single_qubit_gates.add("reset")
-    single_qubit_gates.add("measure")
+    # single_qubit_gates.add("measure")
 
-    qubit_t1 = [item[1]["T1"][0] for item in qubit_properties_backend]
-    qubit_t2 = [item[1]["T2"][0] for item in qubit_properties_backend]
-    qubit_frequency = [item[1]["frequency"][0] for item in qubit_properties_backend]
-    qubit_anharmonicity = [item[1]["anharmonicity"][0] for item in qubit_properties_backend]
-    qubit_readout_error = [item[1]["readout_error"][0] for item in qubit_properties_backend]
-    qubit_readout_length = [item[1]["readout_length"] for item in qubit_properties_backend]
+    qubit_t1 = [item[0] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_t2 = [item[1] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_frequency = [item[2] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_readout_error = [item[0] for q_index, item in enumerate(readout_error_values(qubit_properties_backend)) if q_index in set(range(25))]
+    qubit_readout_length = [item[1]["readout_length"] for item in qubit_properties_backend._qubits.items()]
+    
     basis_gates = ibm_device_backend.configuration().basis_gates
 
     device_backend = ConfigurableFakeBackend(name="FakeSycamore", n_qubits=n_qubits, version=1, 
                                              coupling_map=cmap_sycamore_25, basis_gates=basis_gates, 
-                                             qubit_t1=qubit_t1, qubit_t2=qubit_t2, qubit_frequency=qubit_frequency, 
-                                             qubit_readout_error=qubit_readout_error, single_qubit_gates=single_qubit_gates, 
+                                             qubit_t1=qubit_t1, qubit_t2=qubit_t2,
+                                             qubit_frequency=qubit_frequency, 
+                                             qubit_readout_error=qubit_readout_error,
+                                             single_qubit_gates=single_qubit_gates, 
                                              dt=None)
 
     for q, props in device_backend._properties._qubits.items():
         if "readout_length" not in props and q in set(range(n_qubits)):
             props["readout_length"] = qubit_readout_length[q]
+    for g, g_props in deepcopy(device_backend._properties._gates).items():
+        for q, q_props in g_props.items():
+            if len(q) > 1:
+                device_backend._properties._gates[g][(q[1], q[0])] = q_props
 
     return device_backend
 
