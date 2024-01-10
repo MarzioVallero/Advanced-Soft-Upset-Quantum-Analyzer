@@ -1,45 +1,25 @@
 #%%
 from injector_par import *
+from qtcodes import XXZZQubit, XZZXQubit, RepetitionQubit
 
 def main():
-    circuits = []
-
-    # Minimal working example circuit
-    circ = QuantumCircuit(7, 7)
-    circ.x(range(7))
-    circ.measure(range(7), range(7))
+    circ = QuantumCircuit(25, 25)
+    circ.x(range(25))
+    circ.measure(range(25), range(25))
     circ.name = "Google Experiment"
-    circuits.append(circ)
 
     # Repetition qubit surface code
-    from qtcodes import RepetitionQubit
-    qubit = RepetitionQubit({"d":3},"t")
-    qubit.reset_z()
-    qubit.stabilize()
-    qubit.x()
-    qubit.stabilize()
-    qubit.readout_z()
-    qubit.circ.name = "Repetition Qubit"
-    circuits.append(qubit.circ)
-
-    # Logical level Grover's Algorithm
-    from qiskit_algorithms import AmplificationProblem, Grover
-    from qiskit.primitives import Sampler
-    # the state we desire to find is '11'
-    good_state = ['11']
-    # specify the oracle that marks the state '11' as a good solution
-    oracle = QuantumCircuit(2)
-    oracle.cz(0, 1)
-    # define Grover's algorithm
-    problem = AmplificationProblem(oracle, is_good_state=good_state)
-    grover_operator = Grover(sampler=Sampler())
-    grover_circuit = grover_operator.construct_circuit(problem, power=grover_operator.optimal_num_iterations(1, 2), measurement=True)
-    grover_circuit.name = "Grover Search 2 qubits"
-
-    circuits.append(grover_circuit)
+    d = 5
+    T = 1
+    repetition_q = RepetitionQubit({"d":d},"t")
+    repetition_q.reset_z()
+    repetition_q.stabilize()
+    repetition_q.x()
+    repetition_q.stabilize()
+    repetition_q.readout_z()
+    repetition_q.circ.name = "Repetition Qubit"
 
     # Surface code 3,3 XXZZ
-    from qtcodes import XXZZQubit, XZZXQubit
     xxzzd3 = XXZZQubit({'d':3})
     xxzzd3.stabilize()
     xxzzd3.stabilize()
@@ -47,17 +27,6 @@ def main():
     xxzzd3.stabilize()
     xxzzd3.readout_z()
     xxzzd3.circ.name = "XXZZ d3 Qubit"
-    circuits.append(xxzzd3.circ)
-
-    # Surface code 5,5 XXZZ
-    xxzzd5 = XXZZQubit({'d':5})
-    xxzzd5.stabilize()
-    xxzzd5.stabilize()
-    xxzzd5.x()
-    xxzzd5.stabilize()
-    xxzzd5.readout_z()
-    xxzzd5.circ.name = "XXZZ d5 Qubit"
-    circuits.append(xxzzd5.circ)
 
     xzzxd3 = XZZXQubit({'d':3})
     xzzxd3.stabilize()
@@ -65,60 +34,45 @@ def main():
     xzzxd3.x()
     xzzxd3.stabilize()
     xzzxd3.readout_z()
-    xzzxd3.circ.name = "XXZZ d3 Qubit"
-    circuits.append(xzzxd3.circ)
+    xzzxd3.circ.name = "XZZX d3 Qubit"
 
-    xzzxd5 = XZZXQubit({'d':5})
-    xzzxd5.stabilize()
-    xzzxd5.stabilize()
-    xzzxd5.x()
-    xzzxd5.stabilize()
-    xzzxd5.readout_z()
-    xzzxd5.circ.name = "XXZZ d5 Qubit"
-    circuits.append(xzzxd5.circ)
+    device_backend = FakeSycamore25()
+    target_circuit = repetition_q.circ
+    qtcodes_circ = repetition_q
 
-    # Overwrite to test only circ
-    circuits = [circ]
+    def bitphase_flip_noise_model(p_error, n_qubits):
+        bit_flip = pauli_error([('X', p_error), ('I', 1 - p_error)])
+        phase_flip = pauli_error([('Z', p_error), ('I', 1 - p_error)])
+        bitphase_flip = bit_flip.compose(phase_flip)
+        noise_model = NoiseModel()
+        for q_index in range(n_qubits):
+            noise_model.add_quantum_error(bitphase_flip, instructions=list(NoiseModel()._1qubit_instructions), qubits=[q_index])
 
-    # Define a device backend
-    device_backend = FakeJakarta()
-    # device_backend = FakeSycamore25()
-
-    # circ = QuantumCircuit(25, 25)
-    # circ.x(range(25))
-    # circ.measure(range(25), range(25))
-    # circ.name = "Google Experiment 25 qubits"
-    # circuits.append(circ)
-    circuits = [circ]
+        return noise_model
 
     ts = time()
-    log(f"Job started at {ts}.")
+    log(f"Job started at {datetime.fromtimestamp(ts)}.")
 
     # Transpile the circuits at the start to not reapeat transpilation at every injection campaing
-    t_circuits = []
-    for circuit in circuits:
-        t_circ = transpile(circuit, device_backend, scheduling_method='asap',
-                initial_layout=list(range(len(circuit.qubits))), seed_transpiler=42)
-        t_circuits.append(t_circ)
-    circuits = t_circuits
-    log(f"Transpilation done ({time() - ts} elapsed)")
+    # t_circ = transpile(target_circuit, device_backend, scheduling_method='asap',
+    #         initial_layout=list(range(len(target_circuit.qubits))), seed_transpiler=42)
+    # log(f"Transpilation done ({time() - ts} elapsed)")
 
     # Transient simulation controls
-    injection_points = [0]
+    injection_points = [2]
     transient_error_function = reset_to_zero
-    spread_depth = 6
-    damping_function = exponential_damping
-    apply_transpiler = False
-    noiseless = False
+    spread_depth = 10
+    damping_function = square_damping
     transient_error_duration_ns = 25000000
-    n_quantised_steps = 100
+    n_quantised_steps = 10
 
-    max_qubits = 27
+    max_qubits = 25
     max_cores = 8
-    gpu_limit = int( (64*1024**3)/((2**max_qubits)*8) )
+    max_gpu_memory = 64 #GB
+    gpu_limit = int( (max_gpu_memory*1024**3)/((2**max_qubits)*8) )
     use_gpu = True
 
-    processes = min(2*max_cores, gpu_limit)
+    processes = min(max_cores, gpu_limit, n_quantised_steps)
     if not use_gpu and (processes > n_quantised_steps or processes > max_cores):
         processes = min(n_quantised_steps+1, max_cores)
 
@@ -127,23 +81,66 @@ def main():
     # n_quantised_steps = transient_error_duration_ns // int(shot_time_per_circuit[circuits[0].name])
 
     # Run transient injection simulation
-    result_dict = run_transient_injection(circuits, 
+    debug = False
+    if not debug:
+        result_dict = run_transient_injection(target_circuit, 
                                           device_backend=device_backend,
+                                          noise_model=bitphase_flip_noise_model(0.01, device_backend.configuration().n_qubits),
                                           injection_points=injection_points,
                                           transient_error_function = transient_error_function,
                                           spread_depth = spread_depth,
                                           damping_function = damping_function,
-                                          apply_transpiler = apply_transpiler,
-                                          noiseless = noiseless,
                                           transient_error_duration_ns = transient_error_duration_ns,
                                           n_quantised_steps = n_quantised_steps,
                                           processes=processes
                                          )
+    else:
+        result_dict_name = f"results/campaign_X"
+        with open(result_dict_name, 'rb') as pickle_file:
+            result_dict = dill.load(pickle_file)
     
     log(f"Simulation done ({time() - ts} elapsed)")
 
-    plot_data(result_dict, count_collapses_error)
+    # Logical error ratio
+    def qtcodes_logical_readout_error(qtcodes_obj, golden_logical_bistring, golden_counts, inj_counts):
+        wrong_logical_bitstring_count = 0
+        total_measurements = 0
+        for bitstring, count in inj_counts.items():
+            logical_bitstring = qtcodes_obj.parse_readout(bitstring, "Z")[0]
+            if logical_bitstring != golden_logical_bistring:
+                wrong_logical_bitstring_count += count
+            total_measurements += count
+            
+        return (wrong_logical_bitstring_count / total_measurements)
+    
+    logical_readout_qtcodes = partial(qtcodes_logical_readout_error, qtcodes_circ, 1)
+    logical_readout_qtcodes.__name__ = "logical_readout_error"
+
+    # Decoder
+    from qtcodes import RepetitionDecoder, RotatedDecoder
+    decoder = RepetitionDecoder({"d":d,"T":T})
+    readout_type = "Z"
+
+    # After decoding logical error rate
+    def qtcodes_decoded_logical_readout_error(decoder, readout_type, golden_logical_bistring, golden_counts, inj_counts):
+        wrong_logical_bitstring_count = 0
+        total_measurements = 0
+        for bitstring, count in inj_counts.items():
+            logical_bitstring = decoder.correct_readout(bitstring, readout_type)
+            if logical_bitstring != golden_logical_bistring:
+                wrong_logical_bitstring_count += count
+            total_measurements += count
+            
+        return (wrong_logical_bitstring_count / total_measurements)
+
+    decoded_logical_readout_qtcodes = partial(qtcodes_decoded_logical_readout_error, decoder, readout_type, 1)
+    decoded_logical_readout_qtcodes.__name__ = "decoder_logical_readout_error"
+
+    plot_transient(result_dict, logical_readout_qtcodes)
+    plot_transient(result_dict, decoded_logical_readout_qtcodes)
     log(f"Data processed ({time() - ts} elapsed)")
 
 if __name__ == "__main__":
     main()
+
+# %%

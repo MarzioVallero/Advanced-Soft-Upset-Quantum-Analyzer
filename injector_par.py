@@ -2,6 +2,7 @@
 from copy import deepcopy
 from inspect import getsource
 from functools import partial
+import pandas as pd
 from multiprocessing import Pool, cpu_count
 from concurrent import futures
 from itertools import repeat
@@ -20,17 +21,18 @@ import dill, gzip
 import tqdm
 from mycolorpy import colorlist as mcp
 from qiskit import transpile, QuantumCircuit
+from qiskit import Aer
 from qiskit.providers.fake_provider import FakeJakarta, FakeMumbai
 from qiskit_aer.noise import NoiseModel
 from qiskit.providers.aer import AerSimulator
 from qiskit_aer.noise.device.parameters import thermal_relaxation_values, readout_error_values
 from qiskit.providers.fake_provider import ConfigurableFakeBackend
-from qiskit.providers.aer.noise import reset_error, mixed_unitary_error
+from qiskit.providers.aer.noise import reset_error, mixed_unitary_error, pauli_error
 from qiskit.circuit.library import RYGate, IGate
 from qiskit.quantum_info.analysis import hellinger_distance, hellinger_fidelity
 
 file_logging = False
-logging_filename = "./qufi.log"
+logging_filename = "./asuqa.log"
 console_logging = True
 
 def FakeSycamore25():
@@ -74,6 +76,14 @@ def check_for_done(l):
         if p.poll() is not None:
             return True, i
     return False, False
+
+def flatten(container):
+    for i in container:
+        if isinstance(i, (list,tuple)):
+            for j in flatten(i):
+                yield j
+        else:
+            yield i
 
 def log(content):
     """Logging wrapper, can redirect both to stdout and a file"""
@@ -144,7 +154,8 @@ def geometric_damping(depth=0):
     return 0.9**depth
 
 def square_damping(depth=0):
-    return 1/((depth+1)**2)
+    n = 1
+    return n**2/((depth+n)**2)
 
 def exponential_damping(depth=0):
     return exp(-(1/10)*depth**2)
@@ -196,236 +207,191 @@ def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability
 
     return noise_model
 
-def run_injection_campaing(circuits, injection_points=[0], transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, apply_transpiler=True, noiseless=False, shots=1024, execution_type="both"):
-    # Select a simulator
-    qasm_sim = AerSimulator()
-    result = {"fault_model":{}, "jobs":{}}
+def run_injection_campaing(circuit, injection_points=[0], transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, noise_model=None, shots=1024, execution_type="fault"):
+    results = []
 
-    # Save injection information
-    result["fault_model"]["transient_error_function"] = transient_error_function
-    result["fault_model"]["spread_depth"] = spread_depth
-    result["fault_model"]["damping_function"] = damping_function
-    result["fault_model"]["device_backend"] = device_backend
-
-    if device_backend is not None:
-        noise_model_backend = NoiseModel.from_backend(device_backend)
+    if noise_model is not None:
+        noise_model_simulator = noise_model
+    elif device_backend is not None:
+        noise_model_simulator = NoiseModel.from_backend(device_backend)
     else:
-        noise_model_backend = NoiseModel()
+        noise_model_simulator = NoiseModel()
+        
+    if noise_model.is_ideal():
+        noise_model_simulator.add_basis_gates(list(NoiseModel._1qubit_instructions))
     
-    basis_gates = noise_model_backend.basis_gates
-    coupling_map = device_backend.configuration().coupling_map
+    # basis_gates = noise_model_simulator.basis_gates
+    # basis_gates.append("id")
+    noise_model_simulator.basis_gates.append("id")
 
-    # Add the dummy inj_gate and the id to the basis gates of the device
-    # basis_gates.append("inj_gate")
-    basis_gates.append("id")
+    # log(f"Injection will be performed on the following circuit:\n{t_circ.draw()}")
 
-    for iteration, circuit in enumerate(circuits):
-        if circuit.name in result['jobs'].keys():
-            circuit.name = circuit.name + str(iteration)
-        result['jobs'][circuit.name] = {}
+    # The noisy AerSimulator doesn't recognise the inj_gate.
+    # Possible solution: map the error to an Identity Gate, wihtout using a custom gate
+    # Create a column of id gates as injection points, then append the rest of the transpiled circuit afterwards
+    # Use deepcopy() to preserve the QuantumRegister structure of the original circuit and allow composition
+    inj_circuit = deepcopy(circuit)
+    inj_circuit.clear()
+    for i in range(len(circuit.qubits)):
+        # inj_circuit.id([i])
+        inj_circuit.append(get_inj_gate(), [i])
+    inj_circuit.compose(circuit, inplace=True)
 
-        # Get the transpiled version of the circuit, if needed
-        if apply_transpiler:
-            t_circ = transpile(
-                circuit,
-                device_backend,
-                scheduling_method='asap',
-                initial_layout=list(range(len(circuit.qubits))),
-                seed_transpiler=42,
-                basis_gates=basis_gates
-            )
-        else:
-            t_circ = circuit
+    # Dictionary of sssp indexed by starting point
+    sssp_dict = {}
+    G = nx.Graph(device_backend.configuration().coupling_map)
+    for inj_index in range(len(circuit.qubits)):
+        # Populate the dictionary of single source shortest paths among nodes in the device's topology up to spread_depth distance
+        sssp_dict[inj_index] = nx.single_source_shortest_path(G, inj_index, cutoff=spread_depth)
 
-        # log(f"Injection will be performed on the following circuit:\n{t_circ.draw()}")
+    # Inject in each physical qubit that could propagate its errors to one of the qubits actually used in the circuit, according to spread_depth
+    # Add the sssp of the neighbouring unused qubits that may corrupt the output qubits
+    inj_qubits = valid_inj_qubits(sssp_dict)
+    keys = sssp_dict.keys()
+    for endpoint in inj_qubits:
+        if endpoint not in keys:
+            sssp_dict[endpoint] = nx.single_source_shortest_path(G, endpoint, cutoff=spread_depth)
 
-        # The noisy AerSimulator doesn't recognise the inj_gate.
-        # Possible solution: map the error to an Identity Gate, wihtout using a custom gate
-        # Create a column of id gates as injection points, then append the rest of the transpiled circuit afterwards
-        # Use deepcopy() to preserve the QuantumRegister structure of the original circuit and allow composition
-        new_t_circ = deepcopy(t_circ)
-        new_t_circ.clear()
-        for i in range(len(circuit.qubits)):
-            # new_t_circ.id([i])
-            new_t_circ.append(get_inj_gate(), [i])
-        new_t_circ.compose(t_circ, inplace=True)
-        t_circ = new_t_circ
-
-        # Dictionary of sssp indexed by starting point
-        sssp_dict = {}
-        G = nx.Graph(device_backend.configuration().coupling_map)
-        for inj_index in range(len(circuit.qubits)):
-            # Populate the dictionary of single source shortest paths among nodes in the device's topology up to spread_depth distance
-            sssp_dict[inj_index] = nx.single_source_shortest_path(G, inj_index, cutoff=spread_depth)
-
-        # Inject in each physical qubit that could propagate its errors to one of the qubits actually used in the circuit, according to spread_depth
-        # Add the sssp of the neighbouring unused qubits that may corrupt the output qubits
-        inj_qubits = valid_inj_qubits(sssp_dict)
-        keys = sssp_dict.keys()
-        for endpoint in inj_qubits:
-            if endpoint not in keys:
-                sssp_dict[endpoint] = nx.single_source_shortest_path(G, endpoint, cutoff=spread_depth)
-
-        targets = []
-        if noiseless:
-            ideal_noise_model = NoiseModel()
-            ideal_noise_model.add_basis_gates(list(ideal_noise_model._1qubit_instructions))
-            targets.append(("ideal", ideal_noise_model))
-        if device_backend is not None:
-            targets.append(("noisy", NoiseModel.from_backend(device_backend)))
-
-        for target in targets:
-            if execution_type == "golden" or execution_type != "injection":
-                # probs = execute(t_circ, qasm_sim, noise_model=target[1], coupling_map=coupling_map, shots=shots)
-                # result["jobs"][circuit.name][target[0]] = probs.result()
-
-                qasm_sim = AerSimulator(noise_model=target[1], basis_gates=basis_gates)
-                try:
-                    qasm_sim.set_options(device='GPU')
-                except:
-                    pass
-                probs = qasm_sim.run(t_circ, shots=shots).result()
-                result["jobs"][circuit.name][target[0]] = probs
-
-            # Execute the circuit with/without noise (depending on target), but with the transient_fault, with respect to each qubit
-            if execution_type == "injection" or execution_type != "golden":
-                for inj_index in injection_points:
-                    noise_model = deepcopy(target[1])
-                    noise_model.add_basis_gates(["inj_gate"])
-                    noise_model = spread_transient_error(noise_model, sssp_dict[inj_index], root_inj_probability, spread_depth, transient_error_function, damping_function)
-
-                    qasm_sim = AerSimulator(noise_model=noise_model, basis_gates=noise_model.basis_gates)
-                    try:
-                        qasm_sim.set_options(device='GPU')
-                    except:
-                        pass    
-                    probs_with_transient = qasm_sim.run(t_circ, shots=shots).result()
-
-                    if target[0] + "_with_transient" not in result["jobs"][circuit.name].keys():
-                        result["jobs"][circuit.name][target[0] + "_with_transient"] = []
-                    result["jobs"][circuit.name][target[0] + "_with_transient"].append((inj_index, probs_with_transient))
-
-    return (time_step, result)
-
-def get_shot_execution_time_ns(circuits, device_backend=None, apply_transpiler=True):
-    shot_time_per_circuit = {}
-
-    if device_backend is not None:
-        noise_model_backend = NoiseModel.from_backend(device_backend)
+    if execution_type == "golden":
+        sim = AerSimulator(noise_model=deepcopy(noise_model_simulator), basis_gates=noise_model_simulator.basis_gates)
+        try:
+            sim.set_options(device='GPU')
+            counts = sim.run(inj_circuit, shots=shots).result().get_counts()
+        except RuntimeError:
+            sim.set_options(device='CPU')
+            counts = sim.run(inj_circuit, shots=shots).result().get_counts()
+        results.append( {"root_injection_point":None, "shots":shots, "transient_fault_prob":root_inj_probability, "counts":counts} )
     else:
-        noise_model_backend = NoiseModel()
-    
-    basis_gates = noise_model_backend.basis_gates
+        for inj_index in injection_points:
+            noise_model = deepcopy(noise_model_simulator)
+            noise_model.add_basis_gates(["inj_gate"])
+            noise_model = spread_transient_error(noise_model, sssp_dict[inj_index], root_inj_probability, spread_depth, transient_error_function, damping_function)
 
-    for iteration, circuit in enumerate(circuits):
-        if circuit.name in shot_time_per_circuit.keys():
-            circuit.name = circuit.name + str(iteration)
+            sim = AerSimulator(noise_model=noise_model, basis_gates=noise_model.basis_gates)
+            try:
+                sim.set_options(device='GPU')
+                counts = sim.run(inj_circuit, shots=shots).result().get_counts()
+            except RuntimeError:
+                sim.set_options(device='CPU')
+                counts = sim.run(inj_circuit, shots=shots).result().get_counts()
+            results.append( {"root_injection_point":inj_index, "shots":shots, "transient_fault_prob":root_inj_probability, "counts":counts} )
 
-        # Get the transpiled version of the circuit, if needed
-        if apply_transpiler:
-            t_circ = transpile(
-                circuit,
-                device_backend,
-                scheduling_method='asap',
-                initial_layout=list(range(len(circuit.qubits))),
-                seed_transpiler=42,
-                basis_gates=basis_gates
-            )
-        else:
-            t_circ = circuit
+    return results
 
+def get_shot_execution_time_ns(circuit):
+    basis_gates = list(NoiseModel()._1qubit_instructions)
+
+    # Check if the circuit has been scheduled (transpiled) already
+    try:
         min_time = []
         max_time = []
-        for qubit in t_circ.qubits:
-            min_time.append(t_circ.qubit_start_time(qubit))
-            max_time.append(t_circ.qubit_stop_time(qubit))
+        for qubit in circuit.qubits:
+            min_time.append(circuit.qubit_start_time(qubit))
+            max_time.append(circuit.qubit_stop_time(qubit))
+        shot_duration = max(max_time) - min(min_time)
+    except Exception as e:
+        single_gate_avg_duration = 5.0 #ns
+        multi_gate_avg_duration = 20.0 #ns
+        measure_duration = 13.0 #ns
+        qubit_total_duration = [0] * circuit.width()
+        for instruction in reversed(list((circuit.data))):
+            for qubit in instruction.qubits:
+                if instruction.operation.name == "barrier":
+                    pass
+                elif instruction.operation.name == "measure":
+                    qubit_total_duration[qubit.index] += measure_duration
+                elif len(instruction.qubits) == 1:
+                    qubit_total_duration[qubit.index] += single_gate_avg_duration
+                else:
+                    qubit_total_duration[qubit.index] += multi_gate_avg_duration
+        shot_duration = max(qubit_total_duration)   
 
-        shot_time_per_circuit[circuit.name] = max(max_time) - min(min_time)
+    return shot_duration
 
-    return shot_time_per_circuit
-
-def run_transient_injection(circuits, device_backend=None, injection_points=[0], transient_error_function = reset_to_zero, spread_depth = 0, damping_function = exponential_damping, apply_transpiler = False, noiseless = True, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1):
-    data_wrapper = {}
-    data_wrapper["injection_results"] = {}
+def run_transient_injection(circuit, device_backend=None, noise_model=None, injection_points=[0], transient_error_function = reset_to_zero, spread_depth = 0, damping_function = exponential_damping, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1):
+    data_wrapper = {"circuit":circuit,
+                    "device_backend":device_backend,
+                    "noise_model":noise_model,
+                    "transient_error_function":transient_error_function,
+                    "transient_error_duration_ns":transient_error_duration_ns,
+                    "spatial_damping_function":damping_function,
+                    "spread_depth":spread_depth,
+                    "compare_function":None,
+                    "golden_df":None,
+                    "injected_df":None,
+                    }
     
-    shot_time_per_circuit = get_shot_execution_time_ns(circuits, device_backend=device_backend, apply_transpiler=apply_transpiler)
+    shot_time_per_circuit = get_shot_execution_time_ns(circuit)
 
-    shots_per_time_batch_per_circuits = {}
-    for circuit_name, execution_time in shot_time_per_circuit.items():
-        total_shots = transient_error_duration_ns // execution_time
-        time_steps = total_shots // n_quantised_steps
-        shots_per_time_batch_per_circuits[circuit_name] = time_steps
+    total_shots = transient_error_duration_ns // shot_time_per_circuit
+    shots_per_time_batch = total_shots // n_quantised_steps
     
-    probability_per_batch_per_circuits = {}
-    for circuit_name, execution_time in shot_time_per_circuit.items():
-        probability_per_batch_per_circuits[circuit_name] = []
-        for batch in range(n_quantised_steps+1):
-            time_step = batch*shots_per_time_batch_per_circuits[circuit_name]*shot_time_per_circuit[circuit_name]
-            probability = error_probability_decay(time_step, transient_error_duration_ns)
-            probability_per_batch_per_circuits[circuit_name].append(probability)
+    probability_per_batch = []
+    for batch in range(n_quantised_steps+1):
+        time_step = batch*shots_per_time_batch*shot_time_per_circuit
+        probability = error_probability_decay(time_step, transient_error_duration_ns)
+        probability_per_batch.append(probability)
     
-    injection_results = {}
-    golden_results = {}
-    fault_model = {}
-    for circuit in circuits:
-        injection_results[circuit.name] = []
-        golden_result = run_injection_campaing([circuit],
-                                                injection_points,
-                                                transient_error_function,
-                                                spread_depth=spread_depth,
-                                                time_step=0,
-                                                damping_function=damping_function, 
-                                                device_backend=device_backend, 
-                                                apply_transpiler=apply_transpiler,
-                                                noiseless=noiseless,
-                                                shots=int(shots_per_time_batch_per_circuits[circuit.name]*n_quantised_steps),
-                                                execution_type="golden")
-        golden_results[circuit.name] = golden_result[1]
-        if 'damping_function' not in fault_model.keys():
-            fault_model = golden_results[circuit.name]['fault_model']
-            fault_model["transient_error_duration_ns"] = transient_error_duration_ns
+    golden_results = run_injection_campaing(circuit,
+                                            injection_points,
+                                            transient_error_function,
+                                            root_inj_probability=0.0,
+                                            spread_depth=spread_depth,
+                                            damping_function=damping_function, 
+                                            device_backend=device_backend, 
+                                            noise_model=noise_model,
+                                            shots=int(shots_per_time_batch*n_quantised_steps),
+                                            execution_type="golden")
+    data_wrapper["golden_df"] = pd.DataFrame(golden_results)
 
-        data = {}
-        data["args"] = {"circuit":circuit, "injection_points":injection_points, "transient_error_function":transient_error_function, "spread_depth":spread_depth, "damping_function":damping_function, "device_backend":device_backend, "apply_transpiler":apply_transpiler, "noiseless":noiseless, "n_quantised_steps":n_quantised_steps}
-        data["probability_per_batch_per_circuits"] = probability_per_batch_per_circuits
-        data["shots_per_time_batch_per_circuits"] = shots_per_time_batch_per_circuits
-        data["circuit_name"] = circuit.name
+    child_process_args = {"circuit":circuit,
+                          "injection_points":injection_points,
+                          "transient_error_function":transient_error_function,
+                          "probability_per_batch":probability_per_batch,
+                          "spread_depth":spread_depth,
+                          "damping_function":damping_function,
+                          "device_backend":device_backend,
+                          "noise_model":noise_model,
+                          "shots_per_time_batch":shots_per_time_batch,
+                          "n_quantised_steps":n_quantised_steps,
+                          }
+    dill.settings['recurse'] = True
 
-        dill.settings['recurse'] = True
+    child_process_args_name = f'tmp/data_{circuit.name}.pkl'
+    if not isdir(dirname(child_process_args_name)):
+        mkdir(dirname(child_process_args_name))
+    with open(child_process_args_name, 'wb') as handle:
+        dill.dump(child_process_args, handle, protocol=dill.HIGHEST_PROTOCOL)
 
-        data_name = f'tmp/data_{circuit.name}.pkl'
-        if not isdir(dirname(data_name)):
-            mkdir(dirname(data_name))
-        with open(data_name, 'wb') as handle:
-            dill.dump(data, handle, protocol=dill.HIGHEST_PROTOCOL)
+    proc_list = []
+    probs_circ = enumerate(probability_per_batch)
+    queue = [ ['python3', 'wrapper.py', f'{iteration}', f'{child_process_args_name}'] for iteration, p in probs_circ ]
+    log(f"Injecting {circuit.name}:")
 
-        proc_list = []
-        probs_circ = enumerate(probability_per_batch_per_circuits[circuit.name])
-        queue = [ ['python3', 'wrapper.py', f'{iteration}', f'{data_name}'] for iteration, p in probs_circ ]
-        log(f"Injecting {circuit.name}:")
-
-        with tqdm.tqdm(total=len(probability_per_batch_per_circuits[circuit.name])) as pbar:
-            for process in queue:
-                p = Popen(process)
-                proc_list.append(p)
-                if len(proc_list) == processes:
-                    wait = True
-                    while wait:
-                        done, num = check_for_done(proc_list)
-                        if done:
-                            proc_list.pop(num)
-                            wait = False
-                        else:
-                            sleep(1)
+    with tqdm.tqdm(total=len(probability_per_batch)) as pbar:
+        for process in queue:
+            p = Popen(process)
+            proc_list.append(p)
+            if len(proc_list) == processes:
+                wait = True
+                while wait:
+                    done, num = check_for_done(proc_list)
+                    if done:
+                        proc_list.pop(num)
+                        wait = False
+                    else:
+                        sleep(1)
+                pbar.update()
+        while len(proc_list) > 0:
+            done, num = check_for_done(proc_list)
+            if done:
+                proc_list.pop(num)
                 pbar.update()
 
-    for circuit in circuits:
-        res_dirname = f"results/{circuit.name}_{n_quantised_steps}/"
-        data_wrapper["injection_results"][circuit.name] = read_results_directory(res_dirname)
-        system(f"rm -rf '{res_dirname}'")
-    data_wrapper['golden_results'] = golden_results
-    data_wrapper['fault_model'] = fault_model
+    res_dirname = f"results/{circuit.name}_{n_quantised_steps}/"
+    data_wrapper["injected_df"] = pd.DataFrame(list(flatten(read_results_directory(res_dirname))))
 
+    system(f"rm -rf '{res_dirname}'")
     data_wrapper_filename = f"results/campaign_{datetime.now()}"
     with open(data_wrapper_filename, 'wb') as handle:
         dill.dump(data_wrapper, handle, protocol=dill.HIGHEST_PROTOCOL)
@@ -479,46 +445,47 @@ def filter_dict(result_dict, qubits):
 
     return result_dict
 
-def plot_data(data, compare_function):
+def plot_transient(data, compare_function):
     markers = {"ideal":"o", "noisy":"s"}
     linestyle = {"ideal":"--", "noisy":"-"}
-
+    
     sns.set()
     sns.set_palette("deep")
 
-    for circuit_name in data['golden_results'].keys():
-        golden_executions = data['golden_results'][circuit_name]['jobs'][circuit_name]
-        inj_executions = data['injection_results'][circuit_name]
-        time_steps = [time_step for time_step, dict in data['injection_results'][circuit_name]]
-        plt.figure(figsize=(20,10))
-        for target in golden_executions.keys():
-            # Golden
-            golden_counts = golden_executions[target].get_counts()
-            golden_bitstring = max(golden_counts, key=golden_counts.get)
-            golden_y = []
-            for time_step in time_steps:
-                golden_y.append(compare_function(golden_counts, golden_counts))
-            plt.plot(time_steps, golden_y, label=f"golden {target}", color="gold", marker=markers[target], linestyle=linestyle[target]) 
+    golden_executions = data['golden_df']
+    inj_executions = data['injected_df']
+    inj_executions.sort_values('transient_fault_prob')
+    time_steps = [index*row["shots"] for index, row in inj_executions.iterrows()]
+    plt.figure(figsize=(20,10))
 
-            injected_qubits = [qubit for qubit, result in inj_executions[0][1][target+"_with_transient"]]
-            colours = mcp.gen_color(cmap="cool", n=len(injected_qubits))
-            for index, inj_qubit in enumerate(injected_qubits):
-                injected_y = []
-                for p in inj_executions:
-                    inj_counts = [item[1].get_counts() for item in p[1][target+"_with_transient"] if item[0] == inj_qubit]
-                    inj_counts = inj_counts[0]
-                    if golden_bitstring not in inj_counts.keys():
-                        inj_counts[golden_bitstring] = 0
-                    injected_y.append(compare_function(golden_counts, inj_counts))
-                plt.plot(time_steps, injected_y, label=f"transient {target} qubit {inj_qubit}", 
-                        marker=markers[target], color=colours[index], linestyle=linestyle[target]) 
-        plt.xlabel(f'discretised time (shots), transient duration: {data["fault_model"]["transient_error_duration_ns"]/1e6} ms')
-        plt.ylabel(f'{compare_function.__name__}')
-        plt.title(f'{circuit_name} on {data["fault_model"]["device_backend"].backend_name}, error function: {data["fault_model"]["transient_error_function"].__name__}, spread depth: {data["fault_model"]["spread_depth"]}, spatial damping function: {data["fault_model"]["damping_function"].__name__}')
-        plt.legend()
-        # plt.show()
+    target = "ideal" if data["noise_model"].is_ideal() else "noisy"
 
-        filename = f'plots/{circuit_name}_res_{len(golden_y)}_errorfn_{compare_function.__name__}_backend_{data["fault_model"]["device_backend"].backend_name}_terrorfn_{data["fault_model"]["transient_error_function"].__name__}_sd_{data["fault_model"]["spread_depth"]}_dampfn_{data["fault_model"]["damping_function"].__name__}'
-        if not isdir(dirname(filename)):
-            mkdir(dirname(filename))
-        plt.savefig(filename)
+    # Golden
+    golden_counts = golden_executions["counts"].iloc[0]
+    golden_bitstring = max(golden_counts, key=golden_counts.get)
+    golden_y = []
+    for time_step in time_steps:
+        golden_y.append(compare_function(golden_counts, golden_counts))
+    plt.plot(time_steps, golden_y, label=f"golden {target}", color="gold", marker=markers[target], linestyle=linestyle[target]) 
+
+    injected_qubits = [qubit for qubit in inj_executions["root_injection_point"].unique()]
+    colours = mcp.gen_color(cmap="cool", n=len(injected_qubits))
+    for index, inj_qubit in enumerate(injected_qubits):
+        injected_y = []
+        for row, p in enumerate(sorted(inj_executions["transient_fault_prob"])):
+            inj_counts = inj_executions["counts"].iloc[row]
+            if golden_bitstring not in inj_counts.keys():
+                inj_counts[golden_bitstring] = 0
+            injected_y.append(compare_function(golden_counts, inj_counts))
+        plt.plot(time_steps, injected_y, label=f"transient {target} qubit {inj_qubit}", 
+                marker=markers[target], color=colours[index], linestyle=linestyle[target]) 
+    plt.xlabel(f'discretised time (shots), transient duration: {data["transient_error_duration_ns"]/1e6} ms')
+    plt.ylabel(f'{compare_function.__name__}')
+    plt.title(f'{data["circuit"].name} on {data["device_backend"].backend_name}, error function: {data["transient_error_function"].__name__}, spread depth: {data["spread_depth"]}, spatial damping function: {data["spatial_damping_function"].__name__}')
+    plt.legend()
+    # plt.show()
+
+    filename = f'plots/{data["circuit"].name}_res_{len(golden_y)}_errorfn_{compare_function.__name__}_backend_{data["device_backend"].backend_name}_terrorfn_{data["transient_error_function"].__name__}_sd_{data["spread_depth"]}_dampfn_{data["spatial_damping_function"].__name__}'
+    if not isdir(dirname(filename)):
+        mkdir(dirname(filename))
+    plt.savefig(filename)
