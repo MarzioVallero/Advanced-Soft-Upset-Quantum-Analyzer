@@ -36,7 +36,7 @@ def main():
     xzzxd3.readout_z()
     xzzxd3.circ.name = "XZZX d3 Qubit"
 
-    device_backend = FakeSycamore25()
+    device_backend = CustomBackend()
     target_circuit = repetition_q.circ
     qtcodes_circ = repetition_q
 
@@ -59,7 +59,8 @@ def main():
     # log(f"Transpilation done ({time() - ts} elapsed)")
 
     # Transient simulation controls
-    injection_points = [2]
+    noise_model = bitphase_flip_noise_model(0.0, device_backend.configuration().n_qubits)
+    injection_point = 2
     transient_error_function = reset_to_zero
     spread_depth = 10
     damping_function = square_damping
@@ -85,8 +86,8 @@ def main():
     if not debug:
         result_dict = run_transient_injection(target_circuit, 
                                           device_backend=device_backend,
-                                          noise_model=bitphase_flip_noise_model(0.01, device_backend.configuration().n_qubits),
-                                          injection_points=injection_points,
+                                          noise_model=noise_model,
+                                          injection_point=injection_point,
                                           transient_error_function = transient_error_function,
                                           spread_depth = spread_depth,
                                           damping_function = damping_function,
@@ -136,8 +137,8 @@ def main():
     decoded_logical_readout_qtcodes = partial(qtcodes_decoded_logical_readout_error, decoder, readout_type, 1)
     decoded_logical_readout_qtcodes.__name__ = "decoder_logical_readout_error"
 
-    plot_transient(result_dict, logical_readout_qtcodes)
-    plot_transient(result_dict, decoded_logical_readout_qtcodes)
+    # plot_transient(result_dict, logical_readout_qtcodes)
+    # plot_transient(result_dict, decoded_logical_readout_qtcodes)
     log(f"Data processed ({time() - ts} elapsed)")
 
 if __name__ == "__main__":

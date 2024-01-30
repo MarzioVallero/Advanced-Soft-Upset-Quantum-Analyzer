@@ -5,7 +5,6 @@ from os import makedirs
 
 index = int(argv[1])
 data_name = argv[2]
-splits = cpu_count()
 
 dill.settings['recurse'] = True
 
@@ -19,7 +18,7 @@ circuit_name = original_args["circuit"].name
 for iteration, p in enumerate(probability_per_batch):
     if iteration == index:
         result = run_injection_campaing(original_args["circuit"],
-                                        injection_points=original_args["injection_points"],
+                                        injection_point=original_args["injection_point"],
                                         transient_error_function=original_args["transient_error_function"],
                                         root_inj_probability=p,
                                         time_step=int(shots_per_time_batch)*iteration,
