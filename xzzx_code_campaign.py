@@ -1,29 +1,29 @@
 #%%
 from injector import *
-from qtcodes import RepetitionQubit, RepetitionDecoder
+from qtcodes import XZZXQubit, RotatedDecoder
 
 def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
 
-    # Repetition qubit surface code
-    d = 5
-    T = 1
-    repetition_q = RepetitionQubit({"d":d},"t")
-    repetition_q.reset_z()
-    repetition_q.stabilize()
-    repetition_q.x()
-    repetition_q.stabilize()
-    repetition_q.readout_z()
-    repetition_q.circ.name = "Repetition Qubit"
+    d=3
+    T=1
+    # Surface code 3,3 XXZZ
+    xzzxd3 = XZZXQubit({'d':d})
+    xzzxd3.stabilize()
+    xzzxd3.stabilize()
+    xzzxd3.x()
+    xzzxd3.stabilize()
+    xzzxd3.readout_z()
+    xzzxd3.circ.name = "XZZX d3 Qubit"
 
     # Backend and circuit selection
-    target_circuit = repetition_q.circ
-    qtcodes_circ = repetition_q
+    target_circuit = xzzxd3.circ
+    qtcodes_circ = xzzxd3
     device_backend = CustomBackend(active_qubits=range(target_circuit.num_qubits))
 
     # Readout and error correction
-    decoder = RepetitionDecoder({"d":d,"T":T})
+    decoder = RotatedDecoder({"d":d,"T":T})
     readout_type = "Z"
     expected_logical_output = 1
 
@@ -90,7 +90,7 @@ def main():
         for physical_error in physical_error_list:
             # Run transient injection simulation
             ts = time()
-            noise_model = bitphase_flip_noise_model(physical_error, target_circuit.num_qubits)
+            noise_model = bitphase_flip_noise_model(0.01, target_circuit.num_qubits)
             result_dict = run_transient_injection(transpiled_circuit, 
                                                 device_backend=device_backend,
                                                 noise_model=noise_model,
@@ -130,7 +130,6 @@ def main():
             transpiled_circuit = transpile(target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', seed_transpiler=42)
             active_qubits = get_active_qubits(transpiled_circuit)
             reduced_topology = filter_coupling_map(topology, active_qubits)
-            # Create a reduced CustomBackend and retranspile the circuit
             device_backend = CustomBackend(active_qubits=active_qubits, coupling_map=reduced_topology)
             transpiled_circuit = transpile(target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', seed_transpiler=42)
             log(f"Transpilation on {topology_name} topology done in {timedelta(seconds=time() - ts)}")

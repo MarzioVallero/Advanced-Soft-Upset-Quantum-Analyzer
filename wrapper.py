@@ -1,5 +1,5 @@
 from sys import argv
-from injector_par import *
+from injector import *
 from dill import load
 from os import makedirs
 

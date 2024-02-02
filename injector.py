@@ -25,7 +25,7 @@ from mycolorpy import colorlist as mcp
 from scipy.interpolate import griddata
 from qiskit import transpile, QuantumCircuit
 from qiskit import Aer
-from qiskit.providers.fake_provider import FakeJakarta, FakeMumbai
+from qiskit.providers.fake_provider import  FakeBrooklyn, FakeMumbai, FakeProvider
 from qiskit_aer.noise import NoiseModel
 from qiskit.providers.aer import AerSimulator
 from qiskit_aer.noise.device.parameters import thermal_relaxation_values, readout_error_values
@@ -41,19 +41,24 @@ console_logging = True
 #TODO: remove
 mesh_25_coupling_map = [[(i*5)+j, (i*5)+j+1] for i in range(5) for j in range(4)] +  [[((i)*5)+j, ((i+1)*5)+j] for i in range(4) for j in range(5)]
 
-def CustomBackend(n_qubits=25, coupling_map=mesh_25_coupling_map):
+def CustomBackend(active_qubits=list(range(25)), coupling_map=mesh_25_coupling_map):
+    """Custom backend that uses the noise profile of FakeBrooklyn and maps it to a custom coupling map."""
+    n_qubits = min(len(active_qubits), len(set(flatten(coupling_map))))
+    print(f"n_qubits: {n_qubits}")
     if n_qubits > 30:
         log("No more than 30 qubits can be simulated at a time.")
         raise Exception
-    for edge in deepcopy(coupling_map):
-        if (edge[0] >= n_qubits) or (edge[1] >= n_qubits):
-            coupling_map.remove(edge)
-        # Transpiler uses the coupling map as a directed graph, so reverse edge is needed
-        elif [edge[1], edge[0]] not in coupling_map: 
-            coupling_map.append([edge[1], edge[0]])
+    qubit_remapper = {original:new for original, new in zip(active_qubits, range(n_qubits))}
+    remapped_cm = []
+    for edge in coupling_map:
+        if edge[0] in active_qubits and edge[1] in active_qubits:
+            remapped_cm.append([qubit_remapper[edge[0]], qubit_remapper[edge[1]]])
+            # Transpiler uses the coupling map as a directed graph, so reverse edge is needed
+            remapped_cm.append([qubit_remapper[edge[1]], qubit_remapper[edge[0]]])
 
-    G = nx.Graph(coupling_map)
-    ibm_device_backend = FakeMumbai() # 27 qubit backend
+    G = nx.Graph(remapped_cm)
+    op(G.nodes)
+    ibm_device_backend = FakeBrooklyn() # 27 qubit backend
 
     qubit_properties_backend = ibm_device_backend.properties()
     # single_qubit_gates = set(ibm_device_backend.configuration().basis_gates).intersection(NoiseModel()._1qubit_instructions)
@@ -61,17 +66,17 @@ def CustomBackend(n_qubits=25, coupling_map=mesh_25_coupling_map):
     single_qubit_gates.add("reset")
     # single_qubit_gates.add("measure")
 
-    qubit_t1 = [item[0] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(n_qubits))]
-    qubit_t2 = [item[1] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(n_qubits))]
-    qubit_frequency = [item[2] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in set(range(n_qubits))]
-    qubit_readout_error = [item[0] for q_index, item in enumerate(readout_error_values(qubit_properties_backend)) if q_index in set(range(n_qubits))]
-    qubit_readout_length = [item[1]["readout_length"] for item in qubit_properties_backend._qubits.items()]
+    qubit_t1 = [item[0] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in range(n_qubits)]
+    qubit_t2 = [item[1] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in range(n_qubits)]
+    qubit_frequency = [item[2] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in range(n_qubits)]
+    qubit_readout_error = [item[0] for q_index, item in enumerate(readout_error_values(qubit_properties_backend)) if q_index in range(n_qubits)]
+    qubit_readout_length = [value["readout_length"] for key, value in qubit_properties_backend._qubits.items() if key in range(n_qubits)]
     
     # basis_gates = ibm_device_backend.configuration().basis_gates
     basis_gates = single_qubit_gates
 
     device_backend = ConfigurableFakeBackend(name="FakeSycamore", n_qubits=n_qubits, version=1, 
-                                             coupling_map=coupling_map, basis_gates=basis_gates, 
+                                             coupling_map=remapped_cm, basis_gates=basis_gates, 
                                              qubit_t1=qubit_t1, qubit_t2=qubit_t2,
                                              qubit_frequency=qubit_frequency, 
                                              qubit_readout_error=qubit_readout_error,
@@ -79,7 +84,7 @@ def CustomBackend(n_qubits=25, coupling_map=mesh_25_coupling_map):
                                              dt=None)
 
     for q, props in deepcopy(device_backend._properties._qubits).items():
-        if "readout_length" not in props and q in set(range(n_qubits)):
+        if "readout_length" not in props and q in range(n_qubits):
             props["readout_length"] = qubit_readout_length[q]
     for g, g_props in deepcopy(device_backend._properties._gates).items():
         for q, q_props in g_props.items():
@@ -91,7 +96,56 @@ def CustomBackend(n_qubits=25, coupling_map=mesh_25_coupling_map):
 
     return device_backend
 
+# Filter all the coupling maps available from Qiskit according to minimum number of qubits needed and range of qubits
+def get_coupling_maps(min_size, qubit_range=set(range(30))):
+    """Returns a dictionary(name, coupling_map) containing all the coupling maps from the IBM backends according to the specified parameters, plus three ideal 30-qubit coupling maps (linear, complete, mesh)."""
+    line_edge_list = [[i, i+1] for i in range(30)]
+    complete_edge_list = [[i, j] for i in range(30) for j in range(i) if i != j]
+    mesh_edge_list = [[(i*5)+j, (i*5)+j+1] for i in range(6) for j in range(4)] +  [[((i)*5)+j, ((i+1)*5)+j] for i in range(5) for j in range(5)]
+    graphs = {"linear":(line_edge_list, nx.Graph(line_edge_list)), "complete":(complete_edge_list, nx.Graph(complete_edge_list)), "square_mesh":(mesh_edge_list, nx.Graph(mesh_edge_list))}
+
+    backends = {backend.name():backend for backend in FakeProvider().backends() if backend.configuration().n_qubits > min_size}
+    for name, backend in backends.items():
+        isomorphic = False
+        coupling_map = backend.configuration().coupling_map
+        for edge in deepcopy(coupling_map):
+            if (edge[0] not in qubit_range) or (edge[1] not in qubit_range):
+                coupling_map.remove(edge)
+        G = nx.Graph(coupling_map)
+
+        for graph in graphs.values():
+            if nx.is_isomorphic(G, graph[1]):
+                isomorphic = True
+                break
+        # If isomorphic graph has already been selected or the output graph is not connected, skip
+        if isomorphic or not nx.is_connected(G):
+            continue
+
+        graphs[name] = (coupling_map, G)
+
+    return {name:cm for name, (cm, g) in graphs.items()}
+
+def get_active_qubits(circuit):
+    """Get qubit lines from a transpiled quantum circuit that are "logically" idle, never used in computation"""
+    active_qubits = []
+    operations = list(reversed(list(enumerate(circuit.data))))
+    for idx, _instruction in operations:
+        if _instruction.operation.name not in ["delay", "barrier"]:
+            for _qubit in _instruction.qubits:
+                if _qubit.index not in active_qubits:
+                    active_qubits.append(_qubit.index)
+    return active_qubits
+
+def filter_coupling_map(coupling_map, active_qubits):
+    """Remove from all qubits not in active_qubits from coupling_map"""
+    reduced_coupling_map = []
+    for edge in coupling_map:
+        if edge[0] in active_qubits and edge[1] in active_qubits:
+            reduced_coupling_map.append(edge)
+    return reduced_coupling_map
+
 def bitphase_flip_noise_model(p_error, n_qubits):
+    """Returns a simple noise model on all qubits in range(n_qubits) made of the independent composition of an X and a Z PauliError, both with probability p_error."""
     bit_flip = pauli_error([('X', p_error), ('I', 1 - p_error)])
     phase_flip = pauli_error([('Z', p_error), ('I', 1 - p_error)])
     bitphase_flip = bit_flip.compose(phase_flip)
@@ -102,12 +156,14 @@ def bitphase_flip_noise_model(p_error, n_qubits):
     return noise_model
 
 def check_for_done(l):
+    """Check if a process in the supplied process list has terminated. Returns True and the index of the first process in the list that has terminated."""
     for i, p in enumerate(l):
         if p.poll() is not None:
             return True, i
     return False, False
 
 def flatten(container):
+    """Yields the recursively flattened list of a multiply nested list."""
     for i in container:
         if isinstance(i, (list,tuple)):
             for j in flatten(i):
@@ -116,7 +172,7 @@ def flatten(container):
             yield i
 
 def log(content):
-    """Logging wrapper, can redirect both to stdout and a file"""
+    """Logging wrapper, can redirect both to stdout and a file."""
     if file_logging:
         fp = open(logging_filename, "a")
         fp.write(content+'\n')
@@ -125,11 +181,8 @@ def log(content):
     if console_logging:
         print(content)
 
-def f_wrapped(arg):
-    return run_injection_campaing(*arg)  # Unpacks args
-
 def save_results(results, filename="./results.p.gz"):
-    """Save a results object"""
+    """Save a results object."""
     # Temporary fix for pickle.dump
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
@@ -137,13 +190,13 @@ def save_results(results, filename="./results.p.gz"):
     log(f"Files saved to {filename}")
 
 def read_file(filename):
-    """Read a partial result file"""
+    """Read a result file."""
     with open(filename, 'rb') as pickle_file:
         data = dill.load(pickle_file)
         return data
 
 def read_results_directory(dir):
-    """Process injection results directory and return all data"""
+    """Process the files in a directory by using a process pool and return a merge of all data."""
     filenames = []
     for filename in scandir(dir):
         if filename.is_file():
@@ -159,6 +212,7 @@ def read_results_directory(dir):
     return injection_results
 
 def plot_coupling_map(device_backend):
+    """Extract the coupling map from a Qiskit backend object and plot its coupling map."""
     coupling_map = device_backend.configuration().coupling_map
     G = nx.Graph(coupling_map)
     try:
@@ -221,6 +275,7 @@ def get_inj_gate(inj_duration=0.0):
     return inj_gate
 
 def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability, spread_depth, transient_error_function, damping_function):
+    """Recursively spread the transient error according to the sssp_dict_of_qubit retrieved from the coupling map of the device_backend and add it to the NoiseModel object."""
     if spread_depth > 0:
         noise_model = spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability, spread_depth-1, transient_error_function, damping_function)
     
@@ -243,6 +298,7 @@ def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability
     return noise_model
 
 def run_injection_campaing(circuit, injection_point=0, transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, noise_model=None, shots=1024, execution_type="fault"):
+    """Run one injection according to the specified input parameters."""
     results = []
 
     if noise_model is not None:
@@ -313,6 +369,7 @@ def run_injection_campaing(circuit, injection_point=0, transient_error_function=
     return results
 
 def get_shot_execution_time_ns(circuit):
+    """Return the execution time for a given quantum circuit in nanoseconds. The method has high precision on transpiled (scheduled) circuits, while it produces an estimate using static parameters for non transpiled ones."""
     basis_gates = list(NoiseModel()._1qubit_instructions)
 
     # Check if the circuit has been scheduled (transpiled) already
@@ -343,6 +400,7 @@ def get_shot_execution_time_ns(circuit):
     return shot_duration
 
 def run_transient_injection(circuit, device_backend=None, noise_model=None, injection_point=0, transient_error_function = reset_to_zero, spread_depth = 0, damping_function = exponential_damping, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1, save=True):
+    """Run a set of injections according to the specified input parameters with a custom parallel subprocess pool."""
     data_wrapper = {"circuit":circuit,
                     "device_backend":device_backend,
                     "noise_model":noise_model,
@@ -402,6 +460,8 @@ def run_transient_injection(circuit, device_backend=None, noise_model=None, inje
     queue = [ ['python3', 'wrapper.py', f'{iteration}', f'{child_process_args_name}'] for iteration, p in probs_circ ]
     log(f"Injecting {circuit.name}:")
 
+    # It is necessary to use a "homemade" subprocess pool, since using pytohn's native multiprocessing.pool module
+    # has a conflict with the multiprocessing.pool module inside Qiskit.
     with tqdm.tqdm(total=len(probability_per_batch)) as pbar:
         for process in queue:
             p = Popen(process)
@@ -434,13 +494,8 @@ def run_transient_injection(circuit, device_backend=None, noise_model=None, inje
 
     return data_wrapper
 
-def relative_error(golden_counts, inj_counts):
-    # Basic str compare
-    golden_bitstring = max(golden_counts, key=golden_counts.get)
-    return 1.0 - (golden_counts[golden_bitstring] / sum(golden_counts.values()))
-
 def percentage_collapses_error(golden_counts, inj_counts):
-    # Google's test
+    """Google's test: ratio between the zeroes measured and the total number of qubits measured. Returns a percentage."""
     zeros_measured = 0
     total_measurements = 0
     for bitstring, count in inj_counts.items():
@@ -450,7 +505,7 @@ def percentage_collapses_error(golden_counts, inj_counts):
     return (zeros_measured / total_measurements)
 
 def count_collapses_error(golden_counts, inj_counts):
-    # Google's test
+    """Google's test: ratio between the zeroes measured and the total number of qubits measured. Returns an absolute value, averaged across shots."""
     zeros_measured = 0
     total_measurements = 0
     for bitstring, count in inj_counts.items():
@@ -459,28 +514,8 @@ def count_collapses_error(golden_counts, inj_counts):
         total_measurements += len(bitstring)*count
     return (zeros_measured / total_measurements) * len(bitstring)
 
-def filter_entry(circuit_data, qubits):
-    shot_dict = {}
-    for inj_type, res_tuple_list in circuit_data[1].items():
-        shot_dict[inj_type] = []
-        for inj_index, res in [item for item in res_tuple_list]:
-            if inj_index in qubits:
-                shot_dict[inj_type].append((inj_index, res))
-
-    return (circuit_data[0], shot_dict)
-
-def filter_dict(result_dict, qubits):
-    items = result_dict["injection_results"].items()
-    for circuit_name, circuit_data in items:
-        pool = Pool(cpu_count())
-        filtered_exp = pool.map(partial(filter_entry, qubits=qubits), circuit_data)
-        pool.close()
-        pool.join()
-        result_dict["injection_results"][circuit_name] = filtered_exp
-
-    return result_dict
-
 def plot_transient(data, compare_function):
+    """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) over time. The results are saved under the ./plots directory."""
     markers = {"ideal":"o", "noisy":"s"}
     linestyle = {"ideal":"--", "noisy":"-"}
     
@@ -518,7 +553,6 @@ def plot_transient(data, compare_function):
     plt.ylabel(f'{compare_function.__name__}')
     plt.title(f'{data["circuit"].name} on {data["device_backend"].backend_name}, error function: {data["transient_error_function"].__name__}, spread depth: {data["spread_depth"]}, spatial damping function: {data["spatial_damping_function"].__name__}')
     plt.legend()
-    # plt.show()
     
     filename = f'plots/transient_{compare_function.__name__}_{data["circuit"].name}_res{len(golden_y)}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
     if not isdir(dirname(filename)):
@@ -526,6 +560,7 @@ def plot_transient(data, compare_function):
     plt.savefig(filename)
 
 def plot_injection_logical_error(data, compare_function):
+    """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) over the injection probability of each point. The results are saved under the ./plots directory."""
     markers = {"ideal":"o", "noisy":"s"}
     linestyle = {"ideal":"--", "noisy":"-"}
     
@@ -565,6 +600,7 @@ def plot_injection_logical_error(data, compare_function):
     plt.savefig(filename)
 
 def plot_3d_surface(data_list, compare_function, ip=1):
+    """Plot the results of a <circuit_name>_surfaceplot results file. The results are saved under the ./plots directory."""
     list_of_dict = []
     
     for data in data_list:
@@ -623,6 +659,7 @@ def plot_3d_surface(data_list, compare_function, ip=1):
     plt.savefig(filename)
 
 def plot_topology_injection_point_error(data, compare_function, topology_name=""):
+    """Plot the results of a <circuit_name>_<topology_name>_graphplot results file. The results are saved under the ./plots directory."""
     plt.figure()
     G = nx.Graph(data["device_backend"].configuration().coupling_map)
     df = data["injected_df"]
@@ -664,3 +701,4 @@ def plot_topology_injection_point_error(data, compare_function, topology_name=""
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)
+# %%

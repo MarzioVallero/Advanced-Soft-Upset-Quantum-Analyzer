@@ -1,5 +1,5 @@
 # %% Test different noise models
-from injector_par import *
+from injector import *
 
 nm = bitphase_flip_noise_model(0.1, 1)
 print(nm._local_quantum_errors["x"][(0,)])
@@ -7,7 +7,7 @@ nm.add_quantum_error(reset_to_zero(1), "x", [0])
 print(nm._local_quantum_errors["x"][(0,)])
 
 # %% Test transpilation and simulation time for different topologies
-from injector_par import *
+from injector import *
 from qtcodes import RepetitionQubit
 from qiskit.transpiler import PassManager
 
@@ -55,9 +55,8 @@ for topology_name, topology in topologies.items():
     log("-----------------------------------------------------------------------------------")
 
 # %% Plot topologies from IBM devices
-from injector_par import *
+from injector import *
 from qiskit.providers.fake_provider import FakeProvider
-from qiskit.visualization import plot_coupling_map
 
 # Filter out all "small" backends (less than size qubits)
 size = 18
@@ -93,9 +92,8 @@ for i, (name, (cm, graph)) in enumerate(graphs.items()):
 plt.show()
 
 #%% Get subgraphs of overall used qubits after the transpilation process
-from injector_par import *
+from injector import *
 from qtcodes import XXZZQubit, RepetitionQubit
-from qiskit.converters import circuit_to_dag
 
 xxzzd3 = XXZZQubit({'d':3})
 xxzzd3.stabilize()
@@ -142,4 +140,32 @@ for i, (name, (cm, graph)) in enumerate(transpiled_graphs.items()):
     nx.draw_networkx(graph, pos=pos, with_labels=True, ax=ax[ix])
     ax[ix].set_title(name, fontsize=30)
 plt.show()
-# %%
+# %% Transpilation positioning check
+from injector import *
+from qtcodes import XXZZQubit, RepetitionQubit
+
+xxzzd3 = XXZZQubit({'d':3})
+xxzzd3.stabilize()
+xxzzd3.stabilize()
+xxzzd3.x()
+xxzzd3.stabilize()
+xxzzd3.readout_z()
+xxzzd3.circ.name = "XXZZ d3 Qubit"
+
+target_circuit = xxzzd3.circ
+
+device_backend = CustomBackend(n_qubits=len(transpiled_graphs["fake_brooklyn ol=1"][1].nodes), coupling_map=transpiled_graphs["fake_brooklyn ol=1"][0])
+transpiled_circuit = transpile(target_circuit, device_backend, scheduling_method='asap',
+                        optimization_level=1,
+                        # initial_layout=list(range(len(target_circuit.qubits))),
+                        seed_transpiler=42)
+active_qubits = []
+operations = list(reversed(list(enumerate(transpiled_circuit.data))))
+for idx, _instruction in operations:
+    if _instruction.operation.name not in ["delay", "barrier"]:
+        for _qubit in _instruction.qubits:
+            if _qubit.index not in active_qubits:
+                active_qubits.append(_qubit.index)
+idle_qubits = [ q for q in range(len(graph.nodes)) if q not in active_qubits ]
+
+transpiled_circuit.draw(output="mpl")
