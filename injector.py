@@ -10,7 +10,7 @@ from more_itertools import chunked
 from time import time, sleep
 from datetime import datetime, timedelta
 from objprint import op
-from math import exp, pi
+from math import exp, pi, inf
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -25,6 +25,7 @@ from mycolorpy import colorlist as mcp
 from scipy.interpolate import griddata
 from qiskit import transpile, QuantumCircuit
 from qiskit import Aer
+from qiskit.exceptions import QiskitError
 from qiskit.providers.fake_provider import  FakeBrooklyn, FakeMumbai, FakeProvider
 from qiskit_aer.noise import NoiseModel
 from qiskit.providers.aer import AerSimulator
@@ -38,13 +39,14 @@ from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
 file_logging = False
 logging_filename = "./asuqa.log"
 console_logging = True
-#TODO: remove
-mesh_25_coupling_map = [[(i*5)+j, (i*5)+j+1] for i in range(5) for j in range(4)] +  [[((i)*5)+j, ((i+1)*5)+j] for i in range(4) for j in range(5)]
+#TODO: move to CONST file
+line_edge_list = [[i, i+1] for i in range(30)]
+complete_edge_list = [[i, j] for i in range(30) for j in range(i) if i != j]
+mesh_edge_list = [[(i*5)+j, (i*5)+j+1] for i in range(6) for j in range(4)] +  [[((i)*5)+j, ((i+1)*5)+j] for i in range(5) for j in range(5)]
 
-def CustomBackend(active_qubits=list(range(25)), coupling_map=mesh_25_coupling_map):
+def CustomBackend(active_qubits=list(range(25)), coupling_map=mesh_edge_list):
     """Custom backend that uses the noise profile of FakeBrooklyn and maps it to a custom coupling map."""
     n_qubits = min(len(active_qubits), len(set(flatten(coupling_map))))
-    print(f"n_qubits: {n_qubits}")
     if n_qubits > 30:
         log("No more than 30 qubits can be simulated at a time.")
         raise Exception
@@ -99,9 +101,6 @@ def CustomBackend(active_qubits=list(range(25)), coupling_map=mesh_25_coupling_m
 # Filter all the coupling maps available from Qiskit according to minimum number of qubits needed and range of qubits
 def get_coupling_maps(min_size, qubit_range=set(range(30))):
     """Returns a dictionary(name, coupling_map) containing all the coupling maps from the IBM backends according to the specified parameters, plus three ideal 30-qubit coupling maps (linear, complete, mesh)."""
-    line_edge_list = [[i, i+1] for i in range(30)]
-    complete_edge_list = [[i, j] for i in range(30) for j in range(i) if i != j]
-    mesh_edge_list = [[(i*5)+j, (i*5)+j+1] for i in range(6) for j in range(4)] +  [[((i)*5)+j, ((i+1)*5)+j] for i in range(5) for j in range(5)]
     graphs = {"linear":(line_edge_list, nx.Graph(line_edge_list)), "complete":(complete_edge_list, nx.Graph(complete_edge_list)), "square_mesh":(mesh_edge_list, nx.Graph(mesh_edge_list))}
 
     backends = {backend.name():backend for backend in FakeProvider().backends() if backend.configuration().n_qubits > min_size}
@@ -263,26 +262,46 @@ def valid_inj_qubits(sssp_dict_of_qubits):
         
     return list(set(inj_points))
 
-# Define a dummy inj_gate to be used as an anchor for the NoiseModel
 def get_inj_gate(inj_duration=0.0):
-    # gate_qc = QuantumCircuit(1, name='id')
-    # gate_qc.id(0)
-    # inj_gate = gate_qc.to_gate()
+    """Define a dummy inj_gate to be used as an anchor for the NoiseModel. Currently unused, as errors are applied to all gates."""
     inj_gate = IGate()
     inj_gate.label = "inj_gate"
     inj_gate.duration = inj_duration
 
     return inj_gate
 
+def subprocess_pool(queue, max_processes):
+    """Custom subprocess pool, of up to max_processes simultaneous workers. Queue elements follow the syntax of Popen(subprocess)."""
+    proc_list = []
+    with tqdm.tqdm(total=len(queue)) as pbar:
+        for process in queue:
+            p = Popen(process)
+            proc_list.append(p)
+            if len(proc_list) == max_processes:
+                wait = True
+                while wait:
+                    done, num = check_for_done(proc_list)
+                    if done:
+                        proc_list.pop(num)
+                        wait = False
+                    else:
+                        sleep(1)
+                pbar.update()
+        while len(proc_list) > 0:
+            done, num = check_for_done(proc_list)
+            if done:
+                proc_list.pop(num)
+                pbar.update()
+
 def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability, spread_depth, transient_error_function, damping_function):
     """Recursively spread the transient error according to the sssp_dict_of_qubit retrieved from the coupling map of the device_backend and add it to the NoiseModel object."""
     if spread_depth > 0:
         noise_model = spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability, spread_depth-1, transient_error_function, damping_function)
     
-    for path in sssp_dict_of_qubit.values():
+    for path in sssp_dict_of_qubit:
         if len(path)-1 == spread_depth:
             transient_error = transient_error_function(root_inj_probability*damping_function(depth=spread_depth))
-            # Add error to specific gate on specific qubit
+            # To add an error to specific gate on the inj_gate, make sure to have prepended them in run_injection_campaign() !
             # noise_model.add_quantum_error(transient_error, instructions=["inj_gate"], qubits=[path[-1]])
 
             # Add error to all gates on specific qubit
@@ -294,8 +313,51 @@ def spread_transient_error(noise_model, sssp_dict_of_qubit, root_inj_probability
                 target_instructions_2q = list(noise_model._2qubit_instructions.intersection(noise_model.basis_gates))
                 two_qubit_targets = (path[-2], path[-1])
                 noise_model.add_quantum_error(transient_error.tensor(transient_error), instructions=target_instructions_2q, qubits=two_qubit_targets, warnings=False)
+                inverted_two_qubit_targets = (path[-1], path[-2])
+                noise_model.add_quantum_error(transient_error.tensor(transient_error), instructions=target_instructions_2q, qubits=inverted_two_qubit_targets, warnings=False)
 
     return noise_model
+
+def error_spread_map(coupling_map, injection_point, spread_depth):
+    error_list = []
+    G = nx.Graph(coupling_map)
+    distances = list(nx.single_target_shortest_path_length(G, injection_point, cutoff=spread_depth))
+    for n, d in distances:
+        simple_paths = list(nx.all_simple_paths(G, source=injection_point, target=n, cutoff=d))
+        last_edges = []
+        for path in simple_paths:
+            last_edge = (path[-1], path[-2])
+            if last_edge not in last_edges:
+                last_edges.append(last_edge)
+                error_list.append(path)
+        if injection_point == n:
+            error_list.append([injection_point])
+
+    return error_list
+
+def check_if_sublist(source, sublist):
+    if len(sublist) == 0:
+        return True
+    if len(source) == 0:
+        return False
+    if source[0] == sublist[0]:
+        return check_if_sublist(source[1:], sublist[1:])
+    else:
+        return check_if_sublist(source[1:], sublist)
+
+def merge_injection_paths(spread_map0, spread_map1):
+    merge = []
+    for source_path in spread_map0:
+        merge.append(source_path)
+        for subpath in spread_map1:
+            if subpath not in merge:
+                if check_if_sublist(source_path, subpath):
+                    merge.append(subpath)
+                    if len(source_path) > 2:
+                        merge.remove(source_path)
+                if len(subpath) == 1:
+                    merge.append(subpath)
+    return merge
 
 def run_injection_campaing(circuit, injection_point=0, transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, noise_model=None, shots=1024, execution_type="fault"):
     """Run one injection according to the specified input parameters."""
@@ -310,61 +372,48 @@ def run_injection_campaing(circuit, injection_point=0, transient_error_function=
         
     if noise_model.is_ideal():
         noise_model_simulator.add_basis_gates(list(NoiseModel._1qubit_instructions))
-    
-    # basis_gates = noise_model_simulator.basis_gates
-    # basis_gates.append("id")
+
     noise_model_simulator.basis_gates.append("id")
 
     # log(f"Injection will be performed on the following circuit:\n{t_circ.draw()}")
 
-    # The noisy AerSimulator doesn't recognise the inj_gate.
-    # Possible solution: map the error to an Identity Gate, wihtout using a custom gate
-    # Create a column of id gates as injection points, then append the rest of the transpiled circuit afterwards
+    # Prepend to the circuit an Identity gate labeled "inj_gate" to be used as target by the NoiseModel
     # Use deepcopy() to preserve the QuantumRegister structure of the original circuit and allow composition
-    inj_circuit = deepcopy(circuit)
-    inj_circuit.clear()
-    for i in range(len(circuit.qubits)):
-        # inj_circuit.id([i])
-        inj_circuit.append(get_inj_gate(), [i])
-    inj_circuit.compose(circuit, inplace=True)
-
-    # Dictionary of sssp indexed by starting point
-    sssp_dict = {}
-    G = nx.Graph(device_backend.configuration().coupling_map)
-    for inj_index in range(len(circuit.qubits)):
-        # Populate the dictionary of single source shortest paths among nodes in the device's topology up to spread_depth distance
-        sssp_dict[inj_index] = nx.single_source_shortest_path(G, inj_index, cutoff=spread_depth)
-
-    # Inject in each physical qubit that could propagate its errors to one of the qubits actually used in the circuit, according to spread_depth
-    # Add the sssp of the neighbouring unused qubits that may corrupt the output qubits
-    inj_qubits = valid_inj_qubits(sssp_dict)
-    keys = sssp_dict.keys()
-    for endpoint in inj_qubits:
-        if endpoint not in keys:
-            sssp_dict[endpoint] = nx.single_source_shortest_path(G, endpoint, cutoff=spread_depth)
+    # inj_circuit = deepcopy(circuit)
+    # inj_circuit.clear()
+    # for i in range(len(circuit.qubits)):
+    #     inj_circuit.append(get_inj_gate(), [i])
+    # inj_circuit.compose(circuit, inplace=True)
+    inj_circuit = circuit
 
     if execution_type == "golden":
         sim = AerSimulator(noise_model=deepcopy(noise_model_simulator), basis_gates=noise_model_simulator.basis_gates)
-        try:
-            sim.set_options(device='GPU')
-            counts = sim.run(inj_circuit, shots=shots).result().get_counts()
-        except RuntimeError:
-            sim.set_options(device='CPU')
-            counts = sim.run(inj_circuit, shots=shots).result().get_counts()
-        results.append( {"root_injection_point":None, "shots":shots, "transient_fault_prob":root_inj_probability, "counts":counts} )
     else:
+        # List of paths from injection point to all other nodes such that there are no duplicates in the last two nodes of the path
+        if not isinstance(injection_point, list):
+            injection_point = [injection_point]
+
+        spread_map = None
+        for q in injection_point:
+            if spread_map == None:
+                spread_map = error_spread_map(device_backend.configuration().coupling_map, q, inf)
+            else:
+                q_map = error_spread_map(device_backend.configuration().coupling_map, q, spread_depth)
+                spread_map = merge_injection_paths(spread_map, q_map)
+
+        spread_map = [path for path in spread_map if (len(path) <= spread_depth+1 or (path[-1] in injection_point and path[-2] in injection_point))]
+
         noise_model = deepcopy(noise_model_simulator)
         noise_model.add_basis_gates(["inj_gate"])
-        noise_model = spread_transient_error(noise_model, sssp_dict[injection_point], root_inj_probability, spread_depth, transient_error_function, damping_function)
-
+        noise_model = spread_transient_error(noise_model, spread_map, root_inj_probability, spread_depth, transient_error_function, damping_function)
         sim = AerSimulator(noise_model=noise_model, basis_gates=noise_model.basis_gates)
-        try:
-            sim.set_options(device='GPU')
-            counts = sim.run(inj_circuit, shots=shots).result().get_counts()
-        except RuntimeError:
-            sim.set_options(device='CPU')
-            counts = sim.run(inj_circuit, shots=shots).result().get_counts()
-        results.append( {"root_injection_point":injection_point, "shots":shots, "transient_fault_prob":root_inj_probability, "counts":counts} )
+    try:
+        sim.set_options(device='GPU')
+        counts = sim.run(inj_circuit, shots=shots).result().get_counts()
+    except (RuntimeError, QiskitError) as e:
+        sim.set_options(device='CPU')
+        counts = sim.run(inj_circuit, shots=shots).result().get_counts()
+    results.append( {"root_injection_point":injection_point, "shots":shots, "transient_fault_prob":root_inj_probability, "counts":counts} )
 
     return results
 
@@ -408,7 +457,7 @@ def run_transient_injection(circuit, device_backend=None, noise_model=None, inje
                     "transient_error_duration_ns":transient_error_duration_ns,
                     "spatial_damping_function":damping_function,
                     "spread_depth":spread_depth,
-                    "runtime_compare_functions":{},
+                    "runtime_compare_function":None,
                     "golden_df":None,
                     "injected_df":None,
                     }
@@ -419,14 +468,14 @@ def run_transient_injection(circuit, device_backend=None, noise_model=None, inje
     shots_per_time_batch = total_shots // n_quantised_steps
     
     probability_per_batch = []
-    for batch in range(n_quantised_steps+1):
+    for batch in range(n_quantised_steps):
         time_step = batch*shots_per_time_batch*shot_time_per_circuit
         probability = error_probability_decay(time_step, transient_error_duration_ns)
         probability_per_batch.append(probability)
     
     golden_results = run_injection_campaing(circuit,
-                                            injection_point,
-                                            transient_error_function,
+                                            injection_point=None,
+                                            transient_error_function=transient_error_function,
                                             root_inj_probability=0.0,
                                             spread_depth=spread_depth,
                                             damping_function=damping_function, 
@@ -436,55 +485,29 @@ def run_transient_injection(circuit, device_backend=None, noise_model=None, inje
                                             execution_type="golden")
     data_wrapper["golden_df"] = pd.DataFrame(golden_results)
 
-    child_process_args = {"circuit":circuit,
-                          "injection_point":injection_point,
-                          "transient_error_function":transient_error_function,
-                          "probability_per_batch":probability_per_batch,
-                          "spread_depth":spread_depth,
-                          "damping_function":damping_function,
-                          "device_backend":device_backend,
-                          "noise_model":noise_model,
-                          "shots_per_time_batch":shots_per_time_batch,
-                          "n_quantised_steps":n_quantised_steps,
-                          }
-    dill.settings['recurse'] = True
-
-    child_process_args_name = f'tmp/data_{circuit.name}.pkl'
-    if not isdir(dirname(child_process_args_name)):
-        mkdir(dirname(child_process_args_name))
-    with open(child_process_args_name, 'wb') as handle:
-        dill.dump(child_process_args, handle, protocol=dill.HIGHEST_PROTOCOL)
-
-    proc_list = []
-    probs_circ = enumerate(probability_per_batch)
-    queue = [ ['python3', 'wrapper.py', f'{iteration}', f'{child_process_args_name}'] for iteration, p in probs_circ ]
-    log(f"Injecting {circuit.name}:")
-
     # It is necessary to use a "homemade" subprocess pool, since using pytohn's native multiprocessing.pool module
     # has a conflict with the multiprocessing.pool module inside Qiskit.
-    with tqdm.tqdm(total=len(probability_per_batch)) as pbar:
-        for process in queue:
-            p = Popen(process)
-            proc_list.append(p)
-            if len(proc_list) == processes:
-                wait = True
-                while wait:
-                    done, num = check_for_done(proc_list)
-                    if done:
-                        proc_list.pop(num)
-                        wait = False
-                    else:
-                        sleep(1)
-                pbar.update()
-        while len(proc_list) > 0:
-            done, num = check_for_done(proc_list)
-            if done:
-                proc_list.pop(num)
-                pbar.update()
+    if processes == 1:
+        results_list = []
+        for iteration, p in enumerate(probability_per_batch):
+            res = run_injection_campaing(circuit, injection_point, transient_error_function, root_inj_probability=p, time_step=int(shots_per_time_batch)*iteration, spread_depth=spread_depth, damping_function=damping_function, device_backend=device_backend, noise_model=noise_model, shots=int(shots_per_time_batch), execution_type="injection")
+            results_list.append(res)
+        data_wrapper["injected_df"] = pd.DataFrame(flatten(results_list))
+    else:
+        child_process_args = {"circuit":circuit, "injection_point":injection_point, "transient_error_function":transient_error_function, "probability_per_batch":probability_per_batch, "spread_depth":spread_depth, "damping_function":damping_function, "device_backend":device_backend, "noise_model":noise_model, "shots_per_time_batch":shots_per_time_batch, "n_quantised_steps":n_quantised_steps}
+        dill.settings['recurse'] = True
 
-    res_dirname = f"results/{circuit.name}_{n_quantised_steps}/"
-    data_wrapper["injected_df"] = pd.DataFrame(list(flatten(read_results_directory(res_dirname))))
-    system(f"rm -rf '{res_dirname}'")
+        child_process_args_name = f'tmp/data_{circuit.name}.pkl'
+        if not isdir(dirname(child_process_args_name)):
+            mkdir(dirname(child_process_args_name))
+        with open(child_process_args_name, 'wb') as handle:
+            dill.dump(child_process_args, handle, protocol=dill.HIGHEST_PROTOCOL)
+
+        queue = [ ['python3', 'wrapper.py', f'{iteration}', f'{child_process_args_name}'] for iteration, p in enumerate(probability_per_batch) ]
+        subprocess_pool(queue, max_processes=processes)
+        res_dirname = f"results/{circuit.name}_{n_quantised_steps}/"
+        data_wrapper["injected_df"] = pd.DataFrame(list(flatten(read_results_directory(res_dirname))))
+        system(f"rm -rf '{res_dirname}'")
 
     if save == True:
         data_wrapper_filename = f"results/campaign_{circuit.name}_res{n_quantised_steps}_{device_backend.backend_name}_{transient_error_function.__name__}_sd{spread_depth}_{damping_function.__name__}_{datetime.now()}"
@@ -554,47 +577,119 @@ def plot_transient(data, compare_function):
     plt.title(f'{data["circuit"].name} on {data["device_backend"].backend_name}, error function: {data["transient_error_function"].__name__}, spread depth: {data["spread_depth"]}, spatial damping function: {data["spatial_damping_function"].__name__}')
     plt.legend()
     
-    filename = f'plots/transient_{compare_function.__name__}_{data["circuit"].name}_res{len(golden_y)}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
+    filename = f'plots/{data["circuit"].name}/transient_{compare_function.__name__}_{data["circuit"].name}_res{len(golden_y)}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)
 
-def plot_injection_logical_error(data, compare_function):
+def plot_injection_logical_error(data_list, compare_function):
     """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) over the injection probability of each point. The results are saved under the ./plots directory."""
+    if not isinstance(data_list, list):
+        data_list = [data_list]
+    
     markers = {"ideal":"o", "noisy":"s"}
     linestyle = {"ideal":"--", "noisy":"-"}
-    
+    colours = mcp.gen_color(cmap="cool", n=len(data_list)*len([qubit for qubit in data_list[0]['injected_df']["root_injection_point"].unique()]))
     sns.set()
     sns.set_palette("deep")
-
-    golden_executions = data['golden_df']
-    inj_executions = data['injected_df']
-    inj_executions.sort_values('transient_fault_prob')
-    injection_probabilities = [row["transient_fault_prob"] for index, row in inj_executions.iterrows()]
     plt.figure(figsize=(20,10))
 
-    target = "ideal" if data["noise_model"].is_ideal() else "noisy"
+    for ext_index, data in enumerate(data_list):
+        if data["runtime_compare_function"] != None:
+            local_compare_function = data["runtime_compare_function"]
+        else:
+            local_compare_function = compare_function
+        golden_executions = data['golden_df']
+        inj_executions = data['injected_df']
+        inj_executions.sort_values('transient_fault_prob')
+        injection_probabilities = [row["transient_fault_prob"] for index, row in inj_executions.iterrows()]
 
-    golden_counts = golden_executions["counts"].iloc[0]
-    golden_bitstring = max(golden_counts, key=golden_counts.get)
+        target = "ideal" if data["noise_model"].is_ideal() else "noisy"
 
-    injected_qubits = [qubit for qubit in inj_executions["root_injection_point"].unique()]
-    colours = mcp.gen_color(cmap="cool", n=len(injected_qubits))
-    for index, inj_qubit in enumerate(injected_qubits):
-        injected_y = []
-        for row, p in enumerate(sorted(inj_executions["transient_fault_prob"])):
-            inj_counts = inj_executions["counts"].iloc[row]
-            if golden_bitstring not in inj_counts.keys():
-                inj_counts[golden_bitstring] = 0
-            injected_y.append(compare_function(golden_counts, inj_counts))
-        plt.plot(injection_probabilities, injected_y, label=f"transient {target} qubit {inj_qubit}", 
-                marker=markers[target], color=colours[index], linestyle=linestyle[target]) 
+        golden_counts = golden_executions["counts"].iloc[0]
+        golden_bitstring = max(golden_counts, key=golden_counts.get)
+
+        injected_qubits = [qubit for qubit in inj_executions["root_injection_point"].unique()]
+        for index, inj_qubit in enumerate(injected_qubits):
+            injected_y = []
+            for row, p in enumerate(sorted(inj_executions["transient_fault_prob"])):
+                inj_counts = inj_executions["counts"].iloc[row]
+                if golden_bitstring not in inj_counts.keys():
+                    inj_counts[golden_bitstring] = 0
+                injected_y.append(local_compare_function(golden_counts, inj_counts))
+            plt.plot(injection_probabilities, injected_y, label=f"{target} qubit {inj_qubit} {local_compare_function.__name__}", 
+                    marker=markers[target], color=colours[index+(ext_index*len(injected_qubits))], linestyle=linestyle[target])
+    plt.plot(injection_probabilities, injection_probabilities, label=f"Breakeven performance", 
+                marker="d", color="red", linestyle="--")
+    plt.yscale('log')
     plt.xlabel(f'injection probability')
     plt.ylabel(f'{compare_function.__name__}')
     plt.title(f'{data["circuit"].name} on {data["device_backend"].backend_name}, error function: {data["transient_error_function"].__name__}, spread depth: {data["spread_depth"]}, spatial damping function: {data["spatial_damping_function"].__name__}')
     plt.legend()
 
-    filename = f'plots/logical_physical_error_{compare_function.__name__}_{data["circuit"].name}_res{len(injected_y)}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
+    filename = f'plots/{data["circuit"].name}/logical_physical_error_{compare_function.__name__}_{data["circuit"].name}_res{len(injected_y)}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
+    if not isdir(dirname(filename)):
+        mkdir(dirname(filename))
+    plt.savefig(filename)
+
+def plot_histogram_error(data_list, compare_function):
+    if not isinstance(data_list, list):
+        data_list = [data_list]
+
+    sd_list = []
+    dict_error_per_sd = {}
+
+    for data in data_list:
+        sd_list.append(data["spread_depth"])
+        golden_executions = data['golden_df']
+        inj_executions = data['injected_df']
+        inj_executions.sort_values('transient_fault_prob')
+        injection_probabilities = [row["transient_fault_prob"] for index, row in inj_executions.iterrows()]
+
+        golden_counts = golden_executions["counts"].iloc[0]
+        golden_bitstring = max(golden_counts, key=golden_counts.get)
+
+        inj_executions["logical_error"] = inj_executions["counts"].apply(lambda row: compare_function(golden_counts, row))
+        df2 = inj_executions[["transient_fault_prob", "logical_error"]].groupby(["transient_fault_prob"], as_index=False).mean()
+        df2.sort_values("transient_fault_prob")
+
+        for index, row in df2.iterrows():
+            logical_error = df2["logical_error"].iloc[index]
+            p = str(round(100*df2["transient_fault_prob"].iloc[index], 1)) + " %"
+            if p not in dict_error_per_sd.keys():
+                dict_error_per_sd[p] = []
+            dict_error_per_sd[p].append(logical_error)
+
+    lists = [[lst[i] for lst in dict_error_per_sd.values()] for i in range(len(sd_list))]
+    entries = max( [ len( [el for el in lst if el != 0] ) for lst in lists ] )
+    x = np.array([i for i, lst in enumerate(lists) if any( [item != 0 for item in lst] )]) # the label locations
+    width = 1/(entries+1) # the width of the bars
+    multiplier = 0
+
+    sns.set()
+    sns.set_palette("deep")
+    fig, ax = plt.subplots(figsize=(int(len(x)*entries*0.5), 10), layout='constrained')
+
+    for attribute, measurement in dict_error_per_sd.items():
+        offset = (width * multiplier) - (0.5 * entries * width)
+        trimmed_measurement = [m for i, m in enumerate(measurement) if i in x]
+        if not all(num == 0 for num in trimmed_measurement):
+            rects = ax.bar(x + offset, trimmed_measurement, width, label=attribute)
+            ax.bar_label(rects, padding=3, fmt='{:.2%}')
+            multiplier += 1
+
+    # Add some text for labels, title and custom x-axis tick labels, etc.
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(log_tick_formatter))
+    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
+
+    ax.set_ylabel(f'{compare_function.__name__}')
+    ax.set_title(f'{data["circuit"].name} on {data["device_backend"].backend_name}, error function: {data["transient_error_function"].__name__}, spread depth: {data["spread_depth"]}, spatial damping function: {data["spatial_damping_function"].__name__}')
+    ax.set_xticks(x, x)
+    ax.legend(loc='upper left', ncols=2)
+    ax.set_yscale("log")
+    ax.set_xlim(min(x) - (0.5 * entries * width), max(x) + (0.5 * entries * width))
+
+    filename = f'plots/{data["circuit"].name}/histogram_spread_depth_error_{compare_function.__name__}_{data["circuit"].name}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)
@@ -626,18 +721,12 @@ def plot_3d_surface(data_list, compare_function, ip=1):
     fig = plt.figure(figsize=(12, 10))
     ax = fig.add_subplot(projection='3d')
 
-    def log_tick_formatter(val, pos=None):
-        return f'$10^{{{val:.0f}}}$'
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(log_tick_formatter))
     ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
     ax.invert_xaxis()
 
-    def percentage_tick_formatter_no_decimal(val, pos=None):
-        return f'${{{val*100:.0f}}} \%$'
     ax.yaxis.set_major_formatter(mticker.FuncFormatter(percentage_tick_formatter_no_decimal))
 
-    def percentage_tick_formatter(val, pos=None):
-        return f'     ${{{val*100:.1f}}} \%$'
     ax.zaxis.set_major_formatter(mticker.FuncFormatter(percentage_tick_formatter))
     ax.zaxis.set_major_locator(mticker.MaxNLocator(integer=True))
 
@@ -653,52 +742,65 @@ def plot_3d_surface(data_list, compare_function, ip=1):
     ax.set_zlabel('\nLogical error', labelpad=12)
     plt.title(f'{data["circuit"].name} on {data["device_backend"].backend_name}, error function: {data["transient_error_function"].__name__}\nspread depth: {data["spread_depth"]}, spatial damping function: {data["spatial_damping_function"].__name__}')
 
-    filename = f'plots/3d_histogram_{compare_function.__name__}_{data["circuit"].name}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
+    filename = f'plots/{data["circuit"].name}/3d_histogram_{compare_function.__name__}_{data["circuit"].name}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)
 
 def plot_topology_injection_point_error(data, compare_function, topology_name=""):
     """Plot the results of a <circuit_name>_<topology_name>_graphplot results file. The results are saved under the ./plots directory."""
-    plt.figure()
-    G = nx.Graph(data["device_backend"].configuration().coupling_map)
-    df = data["injected_df"]
-    golden_counts = data["golden_df"]["counts"]
+    nr = int(np.ceil(np.sqrt(len(data.values()))))
+    fig = plt.figure(figsize=(12*nr, 12*nr)); plt.clf()
+    fig, ax = plt.subplots(nr, nr, num=1)
 
-    df["logical_error"] = df["counts"].apply(lambda row: compare_function(golden_counts, row))
-    df2 = df[["root_injection_point", "logical_error"]].groupby(["root_injection_point"], as_index=False).mean()
-    for n in G.nodes:
-        # df_node = df.loc[df["root_injection_point"] == n]
-        # average_node_logical_error = df_node.loc[:, 'logical_error'].mean()
-        df_node = df2.loc[df2["root_injection_point"] == n]
-        average_node_logical_error = df_node.iloc[0]['logical_error'] if not df_node.empty else -1
-        # average_node_logical_error = average_node_logical_error if average_node_logical_error == average_node_logical_error else -1
-        G.nodes[n]["logical_error"] = average_node_logical_error
-        
-    groups = set(nx.get_node_attributes(G, 'logical_error').values())
-    mapping = dict(zip(sorted(groups), count()))
-    colors = [mapping[G.nodes[n]['logical_error']] for n in G.nodes()]
-    nodes = G.nodes()
-    labels = {}
-    for n in nodes:
-        labels[n] = n
-    print(labels)
+    for i, (name, result_dict) in enumerate(data.items()):
+        G = nx.Graph(result_dict["device_backend"].configuration().coupling_map)
+        df = result_dict["injected_df"]
+        golden_counts = result_dict["golden_df"]["counts"]
 
-    # drawing nodes and edges separately so we can capture collection for colobar
-    pos = nx.nx_agraph.graphviz_layout(G, prog="fdp", args="-Glen=100 -Gmaxiter=10000 -Glen=1")
-    ec = nx.draw_networkx_edges(G, pos, alpha=0.2)
-    nc = nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color=colors, node_size=100, cmap=plt.cm.Spectral_r)
-    nx.draw_networkx_labels(G, pos, labels=labels)
-    # plt.colorbar(nc)
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral_r, norm=plt.Normalize(vmin=0.0, vmax=df2["logical_error"].max()))
-    sm._A = []
-    plt.colorbar(sm, ax=plt.gca())
+        df["logical_error"] = df["counts"].apply(lambda row: compare_function(golden_counts, row))
+        df2 = df[["root_injection_point", "logical_error"]].groupby(["root_injection_point"], as_index=False).mean()
+        for n in G.nodes:
+            # df_node = df.loc[df["root_injection_point"] == n]
+            # average_node_logical_error = df_node.loc[:, 'logical_error'].mean()
+            df_node = df2.loc[df2["root_injection_point"] == n]
+            average_node_logical_error = df_node.iloc[0]['logical_error'] if not df_node.empty else -1
+            # average_node_logical_error = average_node_logical_error if average_node_logical_error == average_node_logical_error else -1
+            G.nodes[n]["logical_error"] = average_node_logical_error
+            
+        groups = set(nx.get_node_attributes(G, 'logical_error').values())
+        mapping = dict(zip(sorted(groups), count()))
+        colors = [mapping[G.nodes[n]['logical_error']] for n in G.nodes()]
+        nodes = G.nodes()
+        labels = {}
+        for n in nodes:
+            labels[n] = n
 
-    plt.axis('off')
-    plt.show()
+        # drawing nodes and edges separately so we can capture collection for colobar
+        pos = nx.nx_agraph.graphviz_layout(G, prog="fdp", args="-Glen=100 -Gmaxiter=10000 -Glen=1")
+        ec = nx.draw_networkx_edges(G, pos, alpha=0.2)
+        nc = nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color=colors, node_size=100, cmap=plt.cm.Spectral_r)
+        nx.draw_networkx_labels(G, pos, labels=labels)
+        # plt.colorbar(nc)
+        sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral_r, norm=plt.Normalize(vmin=0.0, vmax=df2["logical_error"].max()))
+        sm._A = []
+        plt.colorbar(sm, ax=plt.gca())
+        plt.axis('off')
+
+        ax[i].set_title(name, fontsize=30)
     
-    filename = f'plots/topology_injection_point_{topology_name}_{compare_function.__name__}_{data["circuit"].name}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
+    filename = f'plots/{data["circuit"].name}/topology_injection_point_{topology_name}_{compare_function.__name__}_{data["circuit"].name}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)
+
+def log_tick_formatter(val, pos=None):
+    return f'$10^{{{val:.0f}}}$'
+
+def percentage_tick_formatter_no_decimal(val, pos=None):
+    return f'${{{val*100:.0f}}} \%$'
+
+def percentage_tick_formatter(val, pos=None):
+    return f'     ${{{val*100:.1f}}} \%$'
+
 # %%
