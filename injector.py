@@ -3,6 +3,7 @@ from copy import deepcopy
 from inspect import getsource
 from functools import partial
 import pandas as pd
+import json
 from multiprocessing import Pool, cpu_count
 from concurrent import futures
 from itertools import repeat, count
@@ -77,7 +78,7 @@ def CustomBackend(active_qubits=list(range(25)), coupling_map=mesh_edge_list):
     # basis_gates = ibm_device_backend.configuration().basis_gates
     basis_gates = single_qubit_gates
 
-    device_backend = ConfigurableFakeBackend(name="FakeSycamore", n_qubits=n_qubits, version=1, 
+    device_backend = ConfigurableFakeBackend(name="CustomBackend", n_qubits=n_qubits, version=1, 
                                              coupling_map=remapped_cm, basis_gates=basis_gates, 
                                              qubit_t1=qubit_t1, qubit_t2=qubit_t2,
                                              qubit_frequency=qubit_frequency, 
@@ -154,6 +155,7 @@ def bitphase_flip_noise_model(p_error, n_qubits):
 
     return noise_model
 
+# TODO: Use PIPE.communicate() to return value from RAM instead of storage
 def check_for_done(l):
     """Check if a process in the supplied process list has terminated. Returns True and the index of the first process in the list that has terminated."""
     for i, p in enumerate(l):
@@ -390,18 +392,17 @@ def run_injection_campaing(circuit, injection_point=0, transient_error_function=
         sim = AerSimulator(noise_model=deepcopy(noise_model_simulator), basis_gates=noise_model_simulator.basis_gates)
     else:
         # List of paths from injection point to all other nodes such that there are no duplicates in the last two nodes of the path
-        if not isinstance(injection_point, list):
-            injection_point = [injection_point]
-
-        spread_map = None
-        for q in injection_point:
-            if spread_map == None:
-                spread_map = error_spread_map(device_backend.configuration().coupling_map, q, inf)
-            else:
-                q_map = error_spread_map(device_backend.configuration().coupling_map, q, spread_depth)
-                spread_map = merge_injection_paths(spread_map, q_map)
-
-        spread_map = [path for path in spread_map if (len(path) <= spread_depth+1 or (path[-1] in injection_point and path[-2] in injection_point))]
+        if isinstance(injection_point, list):
+            spread_map = None
+            for q in injection_point:
+                if spread_map == None:
+                    spread_map = error_spread_map(device_backend.configuration().coupling_map, q, inf)
+                else:
+                    q_map = error_spread_map(device_backend.configuration().coupling_map, q, spread_depth)
+                    spread_map = merge_injection_paths(spread_map, q_map)
+            spread_map = [path for path in spread_map if (len(path) <= spread_depth+1 or (path[-1] in injection_point and path[-2] in injection_point))]
+        else:
+            spread_map = error_spread_map(device_backend.configuration().coupling_map, injection_point, inf)
 
         noise_model = deepcopy(noise_model_simulator)
         noise_model.add_basis_gates(["inj_gate"])
@@ -541,9 +542,8 @@ def plot_transient(data, compare_function):
     """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) over time. The results are saved under the ./plots directory."""
     markers = {"ideal":"o", "noisy":"s"}
     linestyle = {"ideal":"--", "noisy":"-"}
-    
-    sns.set()
-    sns.set_palette("deep")
+
+    sns.set_theme(style="whitegrid", palette="deep")    
 
     golden_executions = data['golden_df']
     inj_executions = data['injected_df']
@@ -590,8 +590,8 @@ def plot_injection_logical_error(data_list, compare_function):
     markers = {"ideal":"o", "noisy":"s"}
     linestyle = {"ideal":"--", "noisy":"-"}
     colours = mcp.gen_color(cmap="cool", n=len(data_list)*len([qubit for qubit in data_list[0]['injected_df']["root_injection_point"].unique()]))
-    sns.set()
-    sns.set_palette("deep")
+    sns.set_theme(style="whitegrid", palette="deep")
+    
     plt.figure(figsize=(20,10))
 
     for ext_index, data in enumerate(data_list):
@@ -666,8 +666,7 @@ def plot_histogram_error(data_list, compare_function):
     width = 1/(entries+1) # the width of the bars
     multiplier = 0
 
-    sns.set()
-    sns.set_palette("deep")
+    sns.set_theme(style="whitegrid", palette="deep")
     fig, ax = plt.subplots(figsize=(int(len(x)*entries*0.5), 10), layout='constrained')
 
     for attribute, measurement in dict_error_per_sd.items():
@@ -747,11 +746,12 @@ def plot_3d_surface(data_list, compare_function, ip=1):
         mkdir(dirname(filename))
     plt.savefig(filename)
 
-def plot_topology_injection_point_error(data, compare_function, topology_name=""):
-    """Plot the results of a <circuit_name>_<topology_name>_graphplot results file. The results are saved under the ./plots directory."""
+def plot_topology_injection_point_error(data, compare_function):
+    """Plot the results of a <circuit_name>_topologies_analysis results file. The results are saved under the ./plots directory."""
     nr = int(np.ceil(np.sqrt(len(data.values()))))
-    fig = plt.figure(figsize=(12*nr, 12*nr)); plt.clf()
+    fig = plt.figure(figsize=(6*nr, 4*nr)); plt.clf()
     fig, ax = plt.subplots(nr, nr, num=1)
+    vmax = 0.25
 
     for i, (name, result_dict) in enumerate(data.items()):
         G = nx.Graph(result_dict["device_backend"].configuration().coupling_map)
@@ -761,35 +761,38 @@ def plot_topology_injection_point_error(data, compare_function, topology_name=""
         df["logical_error"] = df["counts"].apply(lambda row: compare_function(golden_counts, row))
         df2 = df[["root_injection_point", "logical_error"]].groupby(["root_injection_point"], as_index=False).mean()
         for n in G.nodes:
-            # df_node = df.loc[df["root_injection_point"] == n]
-            # average_node_logical_error = df_node.loc[:, 'logical_error'].mean()
             df_node = df2.loc[df2["root_injection_point"] == n]
             average_node_logical_error = df_node.iloc[0]['logical_error'] if not df_node.empty else -1
-            # average_node_logical_error = average_node_logical_error if average_node_logical_error == average_node_logical_error else -1
             G.nodes[n]["logical_error"] = average_node_logical_error
-            
-        groups = set(nx.get_node_attributes(G, 'logical_error').values())
-        mapping = dict(zip(sorted(groups), count()))
-        colors = [mapping[G.nodes[n]['logical_error']] for n in G.nodes()]
-        nodes = G.nodes()
+        
+        colors = []
         labels = {}
+        nodes = G.nodes()
         for n in nodes:
             labels[n] = n
+            colors.append(G.nodes[n]['logical_error'])     
 
         # drawing nodes and edges separately so we can capture collection for colobar
+        ix = np.unravel_index(i, ax.shape)
         pos = nx.nx_agraph.graphviz_layout(G, prog="fdp", args="-Glen=100 -Gmaxiter=10000 -Glen=1")
-        ec = nx.draw_networkx_edges(G, pos, alpha=0.2)
-        nc = nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color=colors, node_size=100, cmap=plt.cm.Spectral_r)
-        nx.draw_networkx_labels(G, pos, labels=labels)
-        # plt.colorbar(nc)
-        sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral_r, norm=plt.Normalize(vmin=0.0, vmax=df2["logical_error"].max()))
-        sm._A = []
-        plt.colorbar(sm, ax=plt.gca())
-        plt.axis('off')
+        ec = nx.draw_networkx_edges(G, pos, alpha=0.4, ax=ax[ix])
+        nc = nx.draw_networkx_nodes(G, pos, nodelist=nodes, node_color=colors, node_size=250, cmap=plt.cm.Spectral_r, ax=ax[ix], vmin=0.0, vmax=vmax)
+        light_text = [n for n in nodes if (G.nodes[n]['logical_error'] < 0.25*vmax or G.nodes[n]['logical_error'] > 0.75*vmax)]
+        nx.draw_networkx_labels(G, pos, labels={k:v for k, v in labels.items() if k not in light_text}, font_color="black", ax=ax[ix])
+        nx.draw_networkx_labels(G, pos, labels={k:v for k, v in labels.items() if k in light_text}, font_color="white", ax=ax[ix])
+        ax[ix].set_title(name, fontsize=25)
 
-        ax[i].set_title(name, fontsize=30)
+    for i in range(i+1, len(ax.flatten())):
+        ix = np.unravel_index(i, ax.shape)
+        ax[ix].set_axis_off()
+
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral_r, norm=plt.Normalize(vmin=0.0, vmax=vmax))
+    sm._A = []
+    cbar = fig.colorbar(sm, ax=ax.ravel().tolist())
+    cbar.ax.tick_params(labelsize=25) 
+    plt.axis('off')
     
-    filename = f'plots/{data["circuit"].name}/topology_injection_point_{topology_name}_{compare_function.__name__}_{data["circuit"].name}_{data["device_backend"].backend_name}_{data["transient_error_function"].__name__}_sd{data["spread_depth"]}_{data["spatial_damping_function"].__name__}'
+    filename = f'plots/{result_dict["circuit"].name}/topology_injection_point_{compare_function.__name__}_{result_dict["circuit"].name}_{result_dict["device_backend"].backend_name}_{result_dict["transient_error_function"].__name__}_sd{result_dict["spread_depth"]}_{result_dict["spatial_damping_function"].__name__}'
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)
