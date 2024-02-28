@@ -90,15 +90,14 @@ def main():
                                             transient_error_duration_ns = transient_error_duration_ns,
                                             n_quantised_steps = n_quantised_steps,
                                             processes=processes,
-                                            save=False
                                             )
         log(f"Code distance analysis simulation done in {timedelta(seconds=time() - ts)}")
-        with open(f"./results/{cd_circuit.name}_code_distance_analysis", 'wb') as handle:
-            dill.dump(result_df, handle, protocol=dill.HIGHEST_PROTOCOL)
+        with bz2.BZ2File(f"./results/{cd_circuit.name} code_distance_analysis", 'wb') as handle:
+            pickle.dump(result_df, handle)
     else:
-        with open(f"./results/{cd_circuit.name}_code_distance_analysis", 'rb') as pickle_file:
-            result_df = dill.load(pickle_file)
-    # plot_injection_logical_error(result_df, get_decoded_logical_error)
+        with bz2.BZ2File(f"./results/{cd_circuit.name} code_distance_analysis", 'rb') as handle:
+            result_df = pickle.load(handle)
+    plot_injection_logical_error(result_df, get_decoded_logical_error)
 
     ##################################################################### Affected qubits analysis #####################################################################
     log(f"Affected qubits analysis started at {datetime.fromtimestamp(time())}")
@@ -112,7 +111,7 @@ def main():
                           CustomBackend(active_qubits=range(aq_circuit.num_qubits), coupling_map=line_edge_list, backend_name="Linear"),
                           CustomBackend(active_qubits=range(aq_circuit.num_qubits), coupling_map=complete_edge_list, backend_name="Complete")]
     
-    read_from_file = True
+    read_from_file = False
     if not read_from_file:
         spread_depth_list_dict = []
         for aq_backend in aq_device_backends:
@@ -131,17 +130,16 @@ def main():
                                                     transient_error_duration_ns = transient_error_duration_ns,
                                                     n_quantised_steps = 1,
                                                     processes=processes,
-                                                    save=False
-                                                    )
+                                                            )
             spread_depth_list_dict.append(result_df)
         concatenated_df = pd.concat(spread_depth_list_dict, ignore_index=True)
-        log(f"Spread depth analysis simulation done in {timedelta(seconds=time() - ts)}")
-        with open(f"./results/{aq_circuit.name}_histogram_affected_qubits", 'wb') as handle:
-            dill.dump(concatenated_df, handle, protocol=dill.HIGHEST_PROTOCOL)
+        log(f"Affected qubits analysis done in {timedelta(seconds=time() - ts)}")
+        with bz2.BZ2File(f"./results/{aq_circuit.name} histogram_affected_qubits", 'wb') as handle:
+            pickle.dump(concatenated_df, handle)
     else:
-        with open(f"./results/{aq_circuit.name}_histogram_affected_qubits", 'rb') as pickle_file:
-            concatenated_df = dill.load(pickle_file)
-    # plot_histogram_error(concatenated_df, compare_error_function)
+        with bz2.BZ2File(f"./results/{aq_circuit.name} histogram_affected_qubits", 'rb') as handle:
+            concatenated_df = pickle.load(handle)
+    plot_histogram_error(concatenated_df, compare_error_function)
     
     ##################################################################### Physical error analysis ######################################################################
     log(f"Physical error analysis started at {datetime.fromtimestamp(time())}")
@@ -161,7 +159,7 @@ def main():
         args_dict_of_lists["device_backends"].append(pe_device_backend)
         args_dict_of_lists["noise_models"].append(noise_model)
 
-    read_from_file = True
+    read_from_file = False
     if not read_from_file:
         ts = time()
         result_df = injection_campaign(circuits=args_dict_of_lists["circuits"],
@@ -174,15 +172,14 @@ def main():
                                             transient_error_duration_ns = transient_error_duration_ns,
                                             n_quantised_steps = len(pe_physical_error_list),
                                             processes=processes,
-                                            save=False
                                             )
-        log(f"Surface plot simulation done in {timedelta(seconds=time() - ts)}")
-        with open(f"./results/{pe_target_circuit.name}_surfaceplot", 'wb') as handle:
-            dill.dump(result_df, handle, protocol=dill.HIGHEST_PROTOCOL)
+        log(f"Physical error analysis done in {timedelta(seconds=time() - ts)}")
+        with bz2.BZ2File(f"./results/{pe_target_circuit.name} surface", 'wb') as handle:
+            pickle.dump(result_df, handle)
     else:
-        with open(f"./results/{pe_target_circuit.name}_surfaceplot", 'rb') as pickle_file:
-            result_df = dill.load(pickle_file)
-    # plot_3d_surface(result_df, compare_error_function, ip=4)
+        with bz2.BZ2File(f"./results/{pe_target_circuit.name} surface", 'rb') as handle:
+            result_df = pickle.load(handle)
+    plot_3d_surface(result_df, compare_error_function, ip=10)
 
     ####################################################################### Topological analysis #######################################################################
     log(f"Topological analysis started at {datetime.fromtimestamp(time())}")
@@ -193,7 +190,7 @@ def main():
     compare_error_function = get_decoded_logical_error(d=(3,3))
     min_size = ta_target_circuit.num_qubits
     ta_injection_points = [q for q in range(min_size)]
-    available_qubits = range(30)
+    available_qubits = range(min_size) # Use range(30) if you want to double transpile, accounting for the possibility of extra "routing qubits" used in the simulation
     topologies = get_coupling_maps(min_size=min_size)
 
     def check_cm_isomorphism(list_cm, target_cm):
@@ -205,24 +202,27 @@ def main():
     tested_topolgies = []
     args_dict_of_lists = {"circuits":[], "device_backends":[], "noise_models":[]}
     for topology_name, topology in topologies.items():
-        device_backend = CustomBackend(active_qubits=available_qubits, coupling_map=topology, backend_name=topology_name)
+        try: # If forced available qubits is not connected, skip it
+            device_backend = CustomBackend(active_qubits=available_qubits, coupling_map=topology, backend_name=topology_name)
+        except Exception as e:
+            continue
         transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', initial_layout=list(range(ta_target_circuit.num_qubits)), seed_transpiler=42)
         active_qubits = get_active_qubits(transpiled_circuit)
         reduced_topology = filter_coupling_map(topology, active_qubits)
         if check_cm_isomorphism(tested_topolgies, reduced_topology):
             continue
-        # Create a reduced CustomBackend and retranspile the circuit
-        device_backend = CustomBackend(active_qubits=active_qubits, coupling_map=reduced_topology, backend_name=topology_name)
-        transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', initial_layout=list(range(ta_target_circuit.num_qubits)), seed_transpiler=42)
+        # Create a reduced CustomBackend and retranspile the circuit only if the active qubits in the first CustomBackend are more than the circuits's min_size
+        if len(available_qubits) != min_size:
+            device_backend = CustomBackend(active_qubits=active_qubits, coupling_map=reduced_topology, backend_name=topology_name)
+            transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', initial_layout=list(range(ta_target_circuit.num_qubits)), seed_transpiler=42)
         noise_model = bitphase_flip_noise_model(physical_error, transpiled_circuit.num_qubits)
         args_dict_of_lists["circuits"].append(transpiled_circuit)
         args_dict_of_lists["device_backends"].append(device_backend)
         args_dict_of_lists["noise_models"].append(noise_model)
         tested_topolgies.append(reduced_topology)
 
-    read_from_file = True
+    read_from_file = False
     if not read_from_file:
-        # Graph plot: loop over root injection qubits
         ts = time()
         result_df = injection_campaign(circuits=args_dict_of_lists["circuits"], 
                                             device_backends=args_dict_of_lists["device_backends"],
@@ -234,16 +234,15 @@ def main():
                                             transient_error_duration_ns = transient_error_duration_ns,
                                             n_quantised_steps = n_quantised_steps,
                                             processes=processes,
-                                            save=False
                                             )
 
-        log(f"Topology plot simulation done in {timedelta(seconds=time() - ts)}")
-        with open(f"./results/{ta_target_circuit.name}_topologies_analysis", 'wb') as handle:
-            dill.dump(result_df, handle, protocol=dill.HIGHEST_PROTOCOL)
+        log(f"Topological analysis done in {timedelta(seconds=time() - ts)}")
+        with bz2.BZ2File(f"./results/{ta_target_circuit.name} topologies_analysis", 'wb') as handle:
+            pickle.dump(result_df, handle)
     else:
-        with open(f"./results/{ta_target_circuit.name}_topologies_analysis", 'rb') as pickle_file:
-            result_df = dill.load(pickle_file)
-    # plot_topology_injection_point_error(topologies_results, compare_error_function)
+        with bz2.BZ2File(f"./results/{ta_target_circuit.name} topologies_analysis", 'rb') as handle:
+            result_df = pickle.load(handle)
+    plot_topology_injection_point_error(result_df, compare_error_function)
 
     log(f"Campaign finished at {datetime.fromtimestamp(time())}")
 

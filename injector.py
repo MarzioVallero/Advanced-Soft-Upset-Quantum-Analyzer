@@ -2,7 +2,7 @@
 from copy import deepcopy
 from functools import partial
 import pandas as pd
-import pickle
+import pickle, bz2
 import re
 from ast import literal_eval as make_tuple
 from time import time, sleep
@@ -16,7 +16,6 @@ import seaborn as sns
 from os.path import isdir, dirname
 from os import mkdir
 from subprocess import Popen, PIPE, STDOUT
-import dill, gzip
 import tqdm
 from mycolorpy import colorlist as mcp
 from scipy.interpolate import griddata
@@ -57,7 +56,7 @@ def CustomBackend(active_qubits=list(range(30)), coupling_map=mesh_edge_list, ba
             remapped_cm.append([qubit_remapper[edge[1]], qubit_remapper[edge[0]]])
 
     G = nx.Graph(remapped_cm)
-    ibm_device_backend = FakeBrooklyn() # 27 qubit backend
+    ibm_device_backend = FakeBrooklyn()
 
     qubit_properties_backend = ibm_device_backend.properties()
     # single_qubit_gates = set(ibm_device_backend.configuration().basis_gates).intersection(NoiseModel()._1qubit_instructions)
@@ -133,6 +132,7 @@ def get_active_qubits(circuit):
             for _qubit in _instruction.qubits:
                 if _qubit.index not in active_qubits:
                     active_qubits.append(_qubit.index)
+    active_qubits.sort()
     return active_qubits
 
 def filter_coupling_map(coupling_map, active_qubits):
@@ -213,19 +213,19 @@ def get_inj_gate(inj_duration=0.0):
 
     return inj_gate
 
-def subprocess_pool2(command, args_dict, max_processes):
+def subprocess_pool(command, args_dict, max_processes):
     """Custom subprocess pool, of up to max_processes simultaneous workers. Queue elements follow the syntax of Popen(subprocess)."""
     output_list = []
     proc_list = []
     with tqdm.tqdm(total=len(args_dict.keys())) as pbar:
         for i, args in args_dict.items():
-            p = Popen(command, bufsize=512*1024, stdin=PIPE, stdout=PIPE, stderr=STDOUT)
-            stdout_data = p.communicate(input=pickle.dumps(args))[0]
+            p = Popen(command, bufsize=4096, stdin=PIPE, stdout=PIPE, stderr=STDOUT)
+            stdout_data = p.communicate(input=bz2.compress(pickle.dumps(args)))[0]
             proc_list.append((p, i))
             if len(proc_list) == max_processes:
                 wait = True
                 while wait:
-                    done, (p,i), o = check_for_done2(proc_list)
+                    done, (p,i), o = check_for_done(proc_list)
                     if done:
                         output_list.append((i, o))
                         proc_list.remove((p,i))
@@ -234,7 +234,7 @@ def subprocess_pool2(command, args_dict, max_processes):
                         sleep(1)
                 pbar.update()
         while len(proc_list) > 0:
-            done, (p,i), o = check_for_done2(proc_list)
+            done, (p,i), o = check_for_done(proc_list)
             if done:
                 output_list.append((i, o))
                 proc_list.remove((p,i))
@@ -242,12 +242,12 @@ def subprocess_pool2(command, args_dict, max_processes):
     
     return output_list
 
-def check_for_done2(l):
+def check_for_done(l):
     """Check if a process in the supplied process list has terminated. Returns True and the index of the first process in the list that has terminated."""
     for p, i in l:
         if p.poll() is not None:
             raw_output = p.communicate()
-            output = pickle.loads(raw_output[0])
+            output = pickle.loads(bz2.decompress(raw_output[0]))
             return True, (p, i) , output
     return False, False, None
 
@@ -378,8 +378,6 @@ def listify(obj):
 
 def run_injection(circuit, injection_point=0, transient_error_function=reset_to_zero, root_inj_probability=1.0, time_step=0, spread_depth=0, damping_function=None, device_backend=None, noise_model=None, shots=1024, execution_type="fault"):
     """Run one injection according to the specified input parameters."""
-    results = []
-
     if noise_model is not None:
         noise_model_simulator = noise_model
     elif device_backend is not None:
@@ -428,11 +426,10 @@ def run_injection(circuit, injection_point=0, transient_error_function=reset_to_
     except (RuntimeError, QiskitError) as e:
         sim.set_options(device='CPU')
         counts = sim.run(inj_circuit, shots=shots).result().get_counts()
-    results.append( {"root_injection_point":injection_point, "shots":shots, "transient_fault_prob":root_inj_probability, "counts":counts} )
+    
+    return counts
 
-    return results
-
-def injection_campaign(circuits, device_backends=None, noise_models=None, injection_points=0, transient_error_functions = reset_to_zero, spread_depths = 0, damping_functions = square_damping, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1, save=True):
+def injection_campaign(circuits, device_backends=None, noise_models=None, injection_points=0, transient_error_functions = reset_to_zero, spread_depths = 0, damping_functions = square_damping, transient_error_duration_ns = 25000000, n_quantised_steps = 4, processes=1):
     """Run a set of injections as the product of all interables in the arguments with a custom parallel subprocess pool.
     Every argument is supplied as either a single object or as a list."""
     
@@ -458,38 +455,32 @@ def injection_campaign(circuits, device_backends=None, noise_models=None, inject
                                                                     "time_step":int(shots_per_time_batch)*quantised_step_index, "spread_depth":spread_depth, "damping_function":damping_function, 
                                                                     "device_backend":device_backend, "noise_model":noise_model, "shots":int(shots_per_time_batch), "execution_type":"injection"}
 
-    results_list = []
     if processes == 1:
-        for p_index, args in subprocess_args.items():
-            res = run_injection(**args)[0]
-            args["counts"] = res
+        for p_index, args in deepcopy(subprocess_args.items()):
+            subprocess_args[p_index]["counts"] = run_injection(**args)
     else:
         command = ['python3', 'subprocess_run_injection.py']
-        process_output_list = subprocess_pool2(command=command, args_dict=subprocess_args, max_processes=processes)
+        process_output_list = subprocess_pool(command=command, args_dict=subprocess_args, max_processes=processes)
         for p_index, counts in process_output_list:
             subprocess_args[p_index]["counts"] = counts
-        results_list = process_output_list.values()
 
-    results_list.append({"circuit_name":args["circuit"].name, 
-                    "injection_point":tuple(listify(args["injection_point"])), 
-                    "transient_error_function":args["transient_error_function"].__name__ if args["transient_error_function"] is not None else None, 
-                    "root_inj_probability":args["root_inj_probability"], 
-                    "time_step":args["time_step"],
-                    "spread_depth":args["spread_depth"], 
-                    "damping_function":args["damping_function"].__name__ if args["damping_function"] is not None else None, 
-                    "device_backend_name":args["device_backend"].name(),
-                    "coupling_map":args["device_backend"].configuration().coupling_map,
-                    "noise_model":args["noise_model"].__name__,
-                    "shots":args["shots"],
-                    "execution_type":args["execution_type"],
-                    "counts":args["counts"]
-                    })
+    results_list = []
+    for args in subprocess_args.values():
+        results_list.append({"circuit_name":args["circuit"].name, 
+                        "injection_point":tuple(listify(args["injection_point"])), 
+                        "transient_error_function":args["transient_error_function"].__name__ if args["transient_error_function"] is not None else None, 
+                        "root_inj_probability":args["root_inj_probability"], 
+                        "time_step":args["time_step"],
+                        "spread_depth":args["spread_depth"], 
+                        "damping_function":args["damping_function"].__name__ if args["damping_function"] is not None else None, 
+                        "device_backend_name":args["device_backend"].name(),
+                        "coupling_map":args["device_backend"].configuration().coupling_map,
+                        "noise_model":args["noise_model"].__name__,
+                        "shots":args["shots"],
+                        "execution_type":args["execution_type"],
+                        "counts":args["counts"]
+                        })
     result_df = pd.DataFrame(flatten(results_list))
-
-    if save == True:
-        result_df_filename = f"results/campaign_{circuit.name}_res{n_quantised_steps}_{device_backend.backend_name}_{transient_error_function.__name__}_sd{spread_depth}_{damping_function.__name__}_{datetime.now()}"
-        with open(result_df_filename, 'wb') as handle:
-            dill.dump(result_df, handle, protocol=dill.HIGHEST_PROTOCOL)
 
     return result_df
 
@@ -613,9 +604,12 @@ def plot_histogram_error(result_df, compare_function):
         df_backend["total_injected_qubits"] = df_backend.apply(get_len, axis=1)
         merged_df = pd.concat([merged_df, df_backend], ignore_index=True)
 
-    n_unique_injection_points = len(merged_df['injection_point'].drop_duplicates())
+    df = pd.pivot(merged_df, index="label", columns="total_injected_qubits", values="logical_error")
+    df = df.loc[:, ~(df.eq(1) | df.isna()).all()]
+    n_unique_injection_points = len(df.columns)
+    df = df.unstack().reset_index(name="logical_error")
     sns.set_theme(style="whitegrid", palette="deep")
-    g = sns.catplot(x="total_injected_qubits", y="logical_error", hue="label", data=merged_df, kind="bar", legend_out=False, height=10, aspect=n_unique_injection_points/10)
+    g = sns.catplot(x="total_injected_qubits", y="logical_error", hue="label", data=df, kind="bar", legend_out=False, height=10, aspect=n_unique_injection_points/10)
 
     circuit_name = re.sub("[^a-zA-Z]", "", merged_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/histogram_spread_depth_error_{compare_function.__name__}_{circuit_name} on {merged_df["device_backend_name"].iloc[0]}'
@@ -678,6 +672,7 @@ def plot_topology_injection_point_error(result_df, compare_function):
     nr = int(np.ceil(np.sqrt(len(result_df["device_backend_name"].drop_duplicates()))))
     fig = plt.figure(figsize=(6*nr, 4*nr))
     plt.clf()
+    plt.axis('off')
     fig, ax = plt.subplots(nr, nr, num=1)
     vmax = 0.0
 
@@ -687,29 +682,32 @@ def plot_topology_injection_point_error(result_df, compare_function):
         golden_counts = df_all_nodes.loc[df_all_nodes['execution_type'] == "golden"]
         df_all_nodes["logical_error"] = df_all_nodes["counts"].apply(lambda row: compare_function(golden_counts, row))
         df_all_nodes.sort_values(by=['time_step'])
-        df_inj_point = [x for _, x in df_all_nodes.loc[df_all_nodes['execution_type'] == "injection"][["injection_point", "logical_error"]].groupby(["injection_point"], as_index=False).mean()]
+        df_inj_point = df_all_nodes.loc[df_all_nodes['execution_type'] == "injection"][["injection_point", "logical_error"]].groupby(["injection_point"], as_index=False).mean()
         max_average_node_logical_error = df_inj_point["logical_error"].max()
         if max_average_node_logical_error > vmax:
             vmax = max_average_node_logical_error
-        for df in df_inj_point:
-            G = nx.Graph(df["coupling_map"].iloc[0])
-            for index, row in df.iterrows():
-                node_logical_error = row.iloc["logical_error"] if not row.empty else 0
-                node_index = row.iloc["injection_point"][0]
-                G.nodes[node_index]["logical_error"] = node_logical_error
-            graphs_with_data.append(df["device_backend_name"].iloc[0], G)
+        coupling_map = df_all_nodes["coupling_map"].iloc[0]
+        print(df_all_nodes["device_backend_name"].iloc[0], coupling_map)
+        G = nx.Graph(coupling_map)
+        for node_index in list(G):
+            G.nodes[node_index]["logical_error"] = 0
+        for index, row in df_inj_point.iterrows():
+            node_logical_error = row["logical_error"] if not row.empty else 0
+            node_index = row["injection_point"][0]
+            G.nodes[node_index]["logical_error"] = node_logical_error
+        graphs_with_data.append((df_all_nodes["device_backend_name"].iloc[0], G))
 
     # drawing nodes and edges separately so we can capture collection for colobar
     for i, (name, G) in enumerate(graphs_with_data):
         ix = np.unravel_index(i, ax.shape)
         pos = nx.nx_agraph.graphviz_layout(G, prog="fdp", args="-Glen=100 -Gmaxiter=10000 -Glen=1")
         ec = nx.draw_networkx_edges(G, pos, alpha=0.4, ax=ax[ix])
-        colors = nx.get_node_attributes(G, "logical_error").values()
+        colors = list(nx.get_node_attributes(G, "logical_error").values())
         nc = nx.draw_networkx_nodes(G, pos, node_color=colors, node_size=250, cmap=plt.cm.Spectral_r, ax=ax[ix], vmin=0.0, vmax=vmax)
         nodes = list(G)
         light_text = [n for n in nodes if (G.nodes[n]['logical_error'] < 0.25*vmax or G.nodes[n]['logical_error'] > 0.75*vmax)]
-        nx.draw_networkx_labels(G, pos, labels={n for n in nodes if n not in light_text}, font_color="black", ax=ax[ix])
-        nx.draw_networkx_labels(G, pos, labels={n for n in nodes if n in light_text}, font_color="white", ax=ax[ix])
+        nx.draw_networkx_labels(G, pos, labels={n:n for n in nodes if n not in light_text}, font_color="black", ax=ax[ix])
+        nx.draw_networkx_labels(G, pos, labels={n:n for n in nodes if n in light_text}, font_color="white", ax=ax[ix])
         ax[ix].set_title(name, fontsize=25)
 
     for i in range(i+1, len(ax.flatten())):
@@ -720,7 +718,6 @@ def plot_topology_injection_point_error(result_df, compare_function):
     sm._A = []
     cbar = fig.colorbar(sm, ax=ax.ravel().tolist())
     cbar.ax.tick_params(labelsize=25) 
-    plt.axis('off')
     
     circuit_name = re.sub("[^a-zA-Z]", "", result_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/topology_injection_point_{compare_function.__name__}_{circuit_name} on {result_df["device_backend_name"].iloc[0]}'
