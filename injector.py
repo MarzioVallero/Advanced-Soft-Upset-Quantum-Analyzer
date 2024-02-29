@@ -687,7 +687,6 @@ def plot_topology_injection_point_error(result_df, compare_function):
         if max_average_node_logical_error > vmax:
             vmax = max_average_node_logical_error
         coupling_map = df_all_nodes["coupling_map"].iloc[0]
-        print(df_all_nodes["device_backend_name"].iloc[0], coupling_map)
         G = nx.Graph(coupling_map)
         for node_index in list(G):
             G.nodes[node_index]["logical_error"] = 0
