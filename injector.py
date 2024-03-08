@@ -467,19 +467,20 @@ def injection_campaign(circuits, device_backends=None, noise_models=None, inject
     results_list = []
     for args in subprocess_args.values():
         results_list.append({"circuit_name":args["circuit"].name, 
-                        "injection_point":tuple(listify(args["injection_point"])), 
-                        "transient_error_function":args["transient_error_function"].__name__ if args["transient_error_function"] is not None else None, 
-                        "root_inj_probability":args["root_inj_probability"], 
-                        "time_step":args["time_step"],
-                        "spread_depth":args["spread_depth"], 
-                        "damping_function":args["damping_function"].__name__ if args["damping_function"] is not None else None, 
-                        "device_backend_name":args["device_backend"].name(),
-                        "coupling_map":args["device_backend"].configuration().coupling_map,
-                        "noise_model":args["noise_model"].__name__,
-                        "shots":args["shots"],
-                        "execution_type":args["execution_type"],
-                        "counts":args["counts"]
-                        })
+                             "p2v_map":{k:v._register.name+str(v._index) for k, v in args["circuit"]._layout.initial_layout._p2v.items()} if args["circuit"]._layout is not None else None,
+                             "injection_point":tuple(listify(args["injection_point"])), 
+                             "transient_error_function":args["transient_error_function"].__name__ if args["transient_error_function"] is not None else None, 
+                             "root_inj_probability":args["root_inj_probability"], 
+                             "time_step":args["time_step"],
+                             "spread_depth":args["spread_depth"], 
+                             "damping_function":args["damping_function"].__name__ if args["damping_function"] is not None else None, 
+                             "device_backend_name":args["device_backend"].name(),
+                             "coupling_map":args["device_backend"].configuration().coupling_map,
+                             "noise_model":args["noise_model"].__name__,
+                             "shots":args["shots"],
+                             "execution_type":args["execution_type"],
+                             "counts":args["counts"]
+                             })
     result_df = pd.DataFrame(flatten(results_list))
 
     return result_df
@@ -666,23 +667,16 @@ def plot_3d_surface(result_df, compare_function, ip=1):
     plt.savefig(filename)
     plt.close()
 
-# TODO: untested!
 def plot_topology_injection_point_error(result_df, compare_function):
     """Plot the results of a <circuit_name>_topologies_analysis results file. The results are saved under the ./plots directory."""
-    nr = int(np.ceil(np.sqrt(len(result_df["device_backend_name"].drop_duplicates()))))
-    fig = plt.figure(figsize=(6*nr, 4*nr))
-    plt.clf()
-    plt.axis('off')
-    fig, ax = plt.subplots(nr, nr, num=1)
     vmax = 0.0
-
     graphs_with_data = []
     df_device_backend_name = [x for _, x in result_df.groupby(["device_backend_name"])]
     for df_all_nodes in df_device_backend_name:
         golden_counts = df_all_nodes.loc[df_all_nodes['execution_type'] == "golden"]
         df_all_nodes["logical_error"] = df_all_nodes["counts"].apply(lambda row: compare_function(golden_counts, row))
         df_all_nodes.sort_values(by=['time_step'])
-        df_inj_point = df_all_nodes.loc[df_all_nodes['execution_type'] == "injection"][["injection_point", "logical_error"]].groupby(["injection_point"], as_index=False).mean()
+        df_inj_point = df_all_nodes.loc[df_all_nodes['execution_type'] == "injection"][["injection_point", "logical_error"]].groupby(["injection_point"], as_index=False).median()
         max_average_node_logical_error = df_inj_point["logical_error"].max()
         if max_average_node_logical_error > vmax:
             vmax = max_average_node_logical_error
@@ -694,19 +688,36 @@ def plot_topology_injection_point_error(result_df, compare_function):
             node_logical_error = row["logical_error"] if not row.empty else 0
             node_index = row["injection_point"][0]
             G.nodes[node_index]["logical_error"] = node_logical_error
-        graphs_with_data.append((df_all_nodes["device_backend_name"].iloc[0], G))
+        p2v_map = golden_counts["p2v_map"].iloc[0]
+        graphs_with_data.append((df_all_nodes["device_backend_name"].iloc[0], G, p2v_map))
+
+    nc = int(np.ceil(np.sqrt(len(graphs_with_data))))
+    nr = int(np.ceil(len(graphs_with_data)/nc))
+    fig = plt.figure(figsize=(12*nc, 10*nr))
+    plt.clf()
+    plt.axis('off')
+    fig, ax = plt.subplots(nr, nc, num=1)
 
     # drawing nodes and edges separately so we can capture collection for colobar
-    for i, (name, G) in enumerate(graphs_with_data):
+    for i, (name, G, p2v_map) in enumerate(graphs_with_data):
         ix = np.unravel_index(i, ax.shape)
-        pos = nx.nx_agraph.graphviz_layout(G, prog="fdp", args="-Glen=100 -Gmaxiter=10000 -Glen=1")
+        pos = nx.nx_agraph.graphviz_layout(G, prog="neato", args="-Gepsilon=.00000000001 -Glen=200 -Gmaxiter=100 -Goverlap_scaling=20 -Goverlap='false' -Gsep=+50") if name!="linear" else nx.spiral_layout(G, equidistant=True)
         ec = nx.draw_networkx_edges(G, pos, alpha=0.4, ax=ax[ix])
-        colors = list(nx.get_node_attributes(G, "logical_error").values())
-        nc = nx.draw_networkx_nodes(G, pos, node_color=colors, node_size=250, cmap=plt.cm.Spectral_r, ax=ax[ix], vmin=0.0, vmax=vmax)
+        colors = nx.get_node_attributes(G, "logical_error")
+        
+        # nc = nx.draw_networkx_nodes(G, pos, node_color=colors, node_size=250, cmap=plt.cm.Spectral_r, ax=ax[ix], vmin=0.0, vmax=vmax)
+        layout = {k:v.replace('t_', '').replace('tq_', '').replace('ancilla', 'a').replace('data', 'd') for k,v in p2v_map.items()}
+        ancilla_nodelist = [k for k,v in layout.items() if "a" in v]
+        measure_nodelist = [k for k,v in layout.items() if "m" in v]
+        data_nodelist = [k for k,v in layout.items() if "d" in v]
+        nc = nx.draw_networkx_nodes(G, pos, node_color=[colors[n] for n in ancilla_nodelist], node_size=1000, cmap=plt.cm.Spectral_r, nodelist=ancilla_nodelist, node_shape='p', edgecolors="black", ax=ax[ix], vmin=0.0, vmax=vmax)
+        nc = nx.draw_networkx_nodes(G, pos, node_color=[colors[n] for n in measure_nodelist], node_size=1000, cmap=plt.cm.Spectral_r, nodelist=measure_nodelist, node_shape='s', edgecolors="black", ax=ax[ix], vmin=0.0, vmax=vmax)
+        nc = nx.draw_networkx_nodes(G, pos, node_color=[colors[n] for n in data_nodelist], node_size=1000, cmap=plt.cm.Spectral_r, nodelist=data_nodelist, node_shape='o', edgecolors="black", ax=ax[ix], vmin=0.0, vmax=vmax)
+
         nodes = list(G)
-        light_text = [n for n in nodes if (G.nodes[n]['logical_error'] < 0.25*vmax or G.nodes[n]['logical_error'] > 0.75*vmax)]
-        nx.draw_networkx_labels(G, pos, labels={n:n for n in nodes if n not in light_text}, font_color="black", ax=ax[ix])
-        nx.draw_networkx_labels(G, pos, labels={n:n for n in nodes if n in light_text}, font_color="white", ax=ax[ix])
+        light_text = [n for n, name in layout.items() if (G.nodes[n]['logical_error'] < 0.25*vmax or G.nodes[n]['logical_error'] > 0.75*vmax)]
+        nx.draw_networkx_labels(G, pos, labels={n:name for n, name in layout.items() if n not in light_text}, font_color="black", ax=ax[ix])
+        nx.draw_networkx_labels(G, pos, labels={n:name for n, name in layout.items() if n in light_text}, font_color="white", ax=ax[ix])
         ax[ix].set_title(name, fontsize=25)
 
     for i in range(i+1, len(ax.flatten())):
@@ -720,6 +731,51 @@ def plot_topology_injection_point_error(result_df, compare_function):
     
     circuit_name = re.sub("[^a-zA-Z]", "", result_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/topology_injection_point_{compare_function.__name__}_{circuit_name} on {result_df["device_backend_name"].iloc[0]}'
+    if not isdir(dirname(filename)):
+        mkdir(dirname(filename))
+    plt.savefig(filename)
+    plt.close()
+
+def plot_minimum_inj_qubits(result_df, compare_function_generator, threshold_min=0.0, threshold_catasptrophic=0.5):
+    """Plot the results of a <circuit_name> minimum_inj_qubits results file. The results are saved under the ./plots directory."""
+
+    def get_len(row):
+        return len(row["injection_point"])
+
+    # code distance analysis
+    df_device_circuit_name = [x for _, x in result_df.groupby(["circuit_name"])]
+    merged_df_list = []
+    for df_circuit_name in df_device_circuit_name:
+        golden_counts = df_circuit_name.loc[df_circuit_name['execution_type'] == "golden"].head(1)
+        d = make_tuple(re.sub("[^0-9(),]", "", golden_counts["circuit_name"].values[0]))
+        compare_function = compare_function_generator(d=d)
+        # Add compare fn
+        df_circuit_name["logical_error"] = df_circuit_name["counts"].apply(lambda row: compare_function(golden_counts, row))
+        golden_counts = df_circuit_name.loc[df_circuit_name['execution_type'] == "golden"].head(1)
+        df_circuit_name = df_circuit_name.loc[df_circuit_name['execution_type'] == "injection"]
+        df_circuit_name["total_injected_qubits"] = df_circuit_name.apply(get_len, axis=1)
+        df_circuit_name.reset_index(drop=True, inplace=True)
+        df_circuit_name = df_circuit_name[df_circuit_name.columns.intersection(["circuit_name", "device_backend_name", "total_injected_qubits", "logical_error"])]
+        df_circuit_name = df_circuit_name.groupby(["circuit_name", "device_backend_name", "total_injected_qubits"], as_index=False).agg({'logical_error': ['mean', 'median', 'std']}).reset_index()
+        df_circuit_name.reset_index(drop=True, inplace=True)
+        df_circuit_name.columns = ["_".join(col_name).rstrip('_') for col_name in df_circuit_name.columns]
+        
+        df_circuit_name.sort_values(by=['total_injected_qubits'])
+        df_circuit_name = df_circuit_name.loc[df_circuit_name["logical_error_median"] > threshold_min]
+        df_circuit_name["d"] = d[0]
+        df_circuit_name["label"] = "Minimum observable error"
+        merged_df_list.append(df_circuit_name.head(1))
+        df_circuit_name = df_circuit_name.loc[df_circuit_name["logical_error_median"] > threshold_catasptrophic]
+        df_circuit_name["label"] = "Unrecoverable error"
+        merged_df_list.append(df_circuit_name.head(1))
+
+    merged_df = pd.concat(merged_df_list, ignore_index=True)
+    merged_df.sort_values(by=["d"], inplace=True)
+    sns.set_theme(style="whitegrid", palette="deep", rc={'figure.figsize':(20,10)})
+    sns.barplot(merged_df,  y="circuit_name", x="total_injected_qubits", hue="label", orient="h")
+
+    circuit_name = re.sub("[^a-zA-Z]", "", merged_df["circuit_name"].iloc[0])
+    filename = f'plots/{circuit_name}/min_injected_qubits_{compare_function.__name__}_{circuit_name} on {merged_df["device_backend_name"].iloc[0]}'
     if not isdir(dirname(filename)):
         mkdir(dirname(filename))
     plt.savefig(filename)

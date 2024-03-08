@@ -38,6 +38,7 @@ def get_decoded_logical_error(d=3, T=1):
 def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
+    log(f"Running campaign on Repetition Qubit")
 
     ##################################################################### Transient error controls #####################################################################
     injection_point = 2
@@ -48,9 +49,10 @@ def main():
     n_quantised_steps = 10
 
     ################################################################# Simulation performance controls ##################################################################
+    n_nodes = 1
     max_qubits = 30
-    max_cores = 24
-    max_gpu_memory = 64 #GB
+    max_cores = 24 * n_nodes
+    max_gpu_memory = 64 * n_nodes #GB
     gpu_limit = int( (max_gpu_memory*1024**3)/((2**max_qubits)*8) )
     use_gpu = True
     processes = min(max_cores, gpu_limit, n_quantised_steps)
@@ -73,7 +75,7 @@ def main():
         cd_object = repetition_qubit(d=d)
         cd_circuit = cd_object.circ
         device_backend = CustomBackend(active_qubits=range(cd_circuit.num_qubits))
-        cd_transpiled_circuit = transpile(cd_circuit, device_backend, scheduling_method='asap', initial_layout=list(range(cd_circuit.num_qubits)), seed_transpiler=42)
+        cd_transpiled_circuit = transpile(cd_circuit, device_backend, scheduling_method='asap', seed_transpiler=42)
         noise_model = bitphase_flip_noise_model(physical_error, cd_transpiled_circuit.num_qubits)
         args_dict_of_lists["circuits"].append(cd_transpiled_circuit)
         args_dict_of_lists["device_backends"].append(device_backend)
@@ -116,7 +118,7 @@ def main():
     if not read_from_file:
         spread_depth_list_dict = []
         for aq_backend in aq_device_backends:
-            aq_transpiled_circuit = transpile(aq_circuit, aq_backend, scheduling_method='asap', initial_layout=list(range(aq_circuit.num_qubits)), seed_transpiler=42)
+            aq_transpiled_circuit = transpile(aq_circuit, aq_backend, scheduling_method='asap', seed_transpiler=42)
             noise_model = bitphase_flip_noise_model(physical_error, aq_transpiled_circuit.num_qubits)
             bfs_ordered_inj_list = [aq_injection_point] + [e for (s, e) in nx.algorithms.bfs_tree(nx.Graph(aq_backend.coupling_map), aq_injection_point).edges()]
             injection_points = [ bfs_ordered_inj_list[0:limit] for limit in range(1, len(bfs_ordered_inj_list) + 1) ]
@@ -149,7 +151,7 @@ def main():
     pe_target_circuit = pe_qtcodes_circ.circ
     pe_device_backend = CustomBackend(active_qubits=range(pe_target_circuit.num_qubits))
     compare_error_function = get_decoded_logical_error(d=(5,1))
-    pe_transpiled_circuit = transpile(pe_target_circuit, pe_device_backend, scheduling_method='asap', initial_layout=list(range(pe_target_circuit.num_qubits)), seed_transpiler=42)
+    pe_transpiled_circuit = transpile(pe_target_circuit, pe_device_backend, scheduling_method='asap', seed_transpiler=42)
     pe_injection_point = 2
 
     args_dict_of_lists = {"circuits":[], "device_backends":[], "noise_models":[]}
@@ -207,7 +209,7 @@ def main():
             device_backend = CustomBackend(active_qubits=available_qubits, coupling_map=topology, backend_name=topology_name)
         except Exception as e:
             continue
-        transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', initial_layout=list(range(ta_target_circuit.num_qubits)), seed_transpiler=42)
+        transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', seed_transpiler=42)
         active_qubits = get_active_qubits(transpiled_circuit)
         reduced_topology = filter_coupling_map(topology, active_qubits)
         if check_cm_isomorphism(tested_topolgies, reduced_topology):
@@ -215,7 +217,7 @@ def main():
         # Create a reduced CustomBackend and retranspile the circuit only if the active qubits in the first CustomBackend are more than the circuits's min_size
         if len(available_qubits) != min_size:
             device_backend = CustomBackend(active_qubits=active_qubits, coupling_map=reduced_topology, backend_name=topology_name)
-            transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', initial_layout=list(range(ta_target_circuit.num_qubits)), seed_transpiler=42)
+            transpiled_circuit = transpile(ta_target_circuit, device_backend, optimization_level=optimization_level, scheduling_method='asap', seed_transpiler=42)
         noise_model = bitphase_flip_noise_model(physical_error, transpiled_circuit.num_qubits)
         args_dict_of_lists["circuits"].append(transpiled_circuit)
         args_dict_of_lists["device_backends"].append(device_backend)
@@ -244,6 +246,57 @@ def main():
         with bz2.BZ2File(f"./results/{ta_target_circuit.name} topologies_analysis", 'rb') as handle:
             result_df = pickle.load(handle)
     plot_topology_injection_point_error(result_df, compare_error_function)
+
+    ####################################################################### Minimum qubits to get logical error analysis #######################################################################
+    log(f"Minimum qubits to get logical error analysis started at {datetime.fromtimestamp(time())}")
+    ts = time()
+    physical_error = 0.01
+    lattice_sizes = [(n,1) for n in range(3, 16, 2)]
+    mq_circuit = repetition_qubit(d=lattice_sizes[-1]).circ
+    mq_spread_depth = 0 # Only inject root qubits
+
+    read_from_file = False
+    if not read_from_file:
+        list_result_df = []
+        for d in lattice_sizes:
+            mq_object = repetition_qubit(d=d)
+            mq_circuit = mq_object.circ
+            mq_device_backend = CustomBackend(active_qubits=range(mq_circuit.num_qubits))
+            mq_transpiled_circuit = transpile(mq_circuit, mq_device_backend, scheduling_method='asap', seed_transpiler=42)
+            noise_model = bitphase_flip_noise_model(physical_error, mq_transpiled_circuit.num_qubits)
+            
+            n_qubits = mq_transpiled_circuit.num_qubits
+            max_elements_in_group = n_qubits
+            coupling_map = mq_device_backend.configuration().coupling_map
+            possible_injection_points = range(n_qubits)
+            injection_points = []
+            for single_injection_point in possible_injection_points:
+                bfs_ordered_inj_list = [single_injection_point] + [e for (s, e) in nx.algorithms.bfs_tree(nx.Graph(coupling_map), single_injection_point).edges()]
+                bfs_derived_injection_points = [ bfs_ordered_inj_list[0:limit] for limit in range(1, max_elements_in_group) ]
+                injection_points += bfs_derived_injection_points
+            injection_points = list(set(tuple(sorted(l)) for l in injection_points))
+            injection_points = [list(el) for el in injection_points]
+            injection_points.sort(key=lambda t: len(t), reverse=False)
+
+            result_df = injection_campaign(circuits=mq_transpiled_circuit,
+                                           device_backends=mq_device_backend,
+                                           noise_models=noise_model,
+                                           injection_points=injection_points,
+                                           transient_error_functions = transient_error_function,
+                                           spread_depths = mq_spread_depth,
+                                           damping_functions = damping_function,
+                                           transient_error_duration_ns = transient_error_duration_ns,
+                                           n_quantised_steps = 1,
+                                           processes=processes)
+            list_result_df.append(result_df)
+        concatenated_df = pd.concat(list_result_df, ignore_index=True)
+        log(f"Code distance analysis simulation done in {timedelta(seconds=time() - ts)}")
+        with bz2.BZ2File(f"./results/{mq_circuit.name} minimum_inj_qubits", 'wb') as handle:
+            pickle.dump(concatenated_df, handle)
+    else:
+        with bz2.BZ2File(f"./results/{mq_circuit.name} minimum_inj_qubits", 'rb') as handle:
+            concatenated_df = pickle.load(handle)
+    plot_minimum_inj_qubits(concatenated_df, get_decoded_logical_error, threshold_min=0.01)
 
     log(f"Campaign finished at {datetime.fromtimestamp(time())}")
 
