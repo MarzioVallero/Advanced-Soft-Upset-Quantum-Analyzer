@@ -1,44 +1,4 @@
-#%%
-from copy import deepcopy
-from functools import partial
-import pandas as pd
-import pickle, bz2
-import re
-from ast import literal_eval as make_tuple
-from time import time, sleep
-from datetime import datetime, timedelta
-from math import exp, inf
-import numpy as np
-import networkx as nx
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-import seaborn as sns
-from os.path import isdir, dirname
-from os import mkdir
-from subprocess import Popen, PIPE, STDOUT
-import tqdm
-from mycolorpy import colorlist as mcp
-from scipy.interpolate import griddata
-from qiskit import transpile, QuantumCircuit
-from qiskit import Aer
-from qiskit.exceptions import QiskitError
-from qiskit.providers.fake_provider import  FakeBrooklyn, FakeProvider
-from qiskit_aer.noise import NoiseModel
-from qiskit.providers.aer import AerSimulator
-from qiskit_aer.noise.device.parameters import thermal_relaxation_values, readout_error_values
-from qiskit.providers.fake_provider import ConfigurableFakeBackend
-from qiskit.providers.aer.noise import reset_error, pauli_error
-from qiskit.circuit.library import IGate
-from qiskit.quantum_info.analysis import hellinger_distance, hellinger_fidelity
-from qiskit.circuit.library.standard_gates import get_standard_gate_name_mapping
-
-file_logging = False
-logging_filename = "./asuqa.log"
-console_logging = True
-#TODO: move to CONST file
-line_edge_list = [[i, i+1] for i in range(30)]
-complete_edge_list = [[i, j] for i in range(30) for j in range(i) if i != j]
-mesh_edge_list = [[(i*5)+j, (i*5)+j+1] for i in range(6) for j in range(4)] +  [[((i)*5)+j, ((i+1)*5)+j] for i in range(5) for j in range(5)]
+from .imports import *
 
 def CustomBackend(active_qubits=list(range(30)), coupling_map=mesh_edge_list, backend_name="Mesh"):
     """Custom backend that uses the noise profile of FakeBrooklyn and maps it to a custom coupling map. 
@@ -145,12 +105,17 @@ def filter_coupling_map(coupling_map, active_qubits):
 
 def bitphase_flip_noise_model(p_error, n_qubits):
     """Returns a simple noise model on all qubits in range(n_qubits) made of the independent composition of an X and a Z PauliError, both with probability p_error."""
-    bit_flip = pauli_error([('X', p_error), ('I', 1 - p_error)])
-    phase_flip = pauli_error([('Z', p_error), ('I', 1 - p_error)])
-    bitphase_flip = bit_flip.compose(phase_flip)
+    # bit_flip = pauli_error([('X', p_error), ('I', 1 - p_error)])
+    # phase_flip = pauli_error([('Z', p_error), ('I', 1 - p_error)])
+    # bitphase_flip = bit_flip.compose(phase_flip)
+    single_qubit_noise = pauli_error([('X', p_error/3), ('Y', p_error/3), ('Z', p_error/3), ('I', 1 - p_error)])
+    two_qubit_noise = single_qubit_noise.tensor(single_qubit_noise)
     noise_model = NoiseModel()
     for q_index in range(n_qubits):
-        noise_model.add_quantum_error(bitphase_flip, instructions=list(NoiseModel()._1qubit_instructions), qubits=[q_index])
+        noise_model.add_quantum_error(single_qubit_noise, instructions=list(NoiseModel()._1qubit_instructions), qubits=[q_index])
+    for q0, q1 in combinations(range(n_qubits), 2):
+        noise_model.add_quantum_error(two_qubit_noise, instructions=list(NoiseModel()._2qubit_instructions), qubits=[q0, q1])
+        noise_model.add_quantum_error(two_qubit_noise, instructions=list(NoiseModel()._2qubit_instructions), qubits=[q1, q0])
 
     # "Do you think God stays in heaven because he, too, lives in fear of what he's created here on earth?"
     setattr(noise_model,"__name__", f"bitphase_flip_noise_model {p_error}")
@@ -175,17 +140,6 @@ def log(content):
         fp.close()
     if console_logging:
         print(content)
-
-def plot_coupling_map(device_backend):
-    """Extract the coupling map from a Qiskit backend object and plot its coupling map."""
-    coupling_map = device_backend.configuration().coupling_map
-    G = nx.Graph(coupling_map)
-    try:
-        pos = nx.spring_layout(G, weight=0.1, iterations=500, threshold=0.00001)
-    except Exception:
-        pos = nx.kamada_kawai_layout(G)
-    nx.draw_networkx(G, pos=pos, with_labels=True)
-    plt.show()
 
 # Define a custom transient error, parametrised by the probability p of being applied.
 # Errors can be composed or tensored together to achieve more complex behaviours:
@@ -459,7 +413,7 @@ def injection_campaign(circuits, device_backends=None, noise_models=None, inject
         for p_index, args in deepcopy(subprocess_args.items()):
             subprocess_args[p_index]["counts"] = run_injection(**args)
     else:
-        command = ['python3', 'subprocess_run_injection.py']
+        command = ['python3', './asuqa/subprocess_run_injection.py']
         process_output_list = subprocess_pool(command=command, args_dict=subprocess_args, max_processes=processes)
         for p_index, counts in process_output_list:
             subprocess_args[p_index]["counts"] = counts
@@ -505,289 +459,29 @@ def count_collapses_error(golden_counts, inj_counts):
         total_measurements += len(bitstring)*count
     return (zeros_measured / total_measurements) * len(bitstring)
 
-# TODO: untested!
-def plot_transient(result_df, compare_function):
-    """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) over time. The results are saved under the ./plots directory."""
-    
-    golden_counts = result_df.loc[result_df['execution_type'] == "golden"]
-    result_df["logical_error"] = result_df["counts"].apply(lambda row: compare_function(golden_counts, row))
-    result_df.sort_values(by=['time_step'])
-    df_golden = result_df.loc[result_df['execution_type'] == "golden"]
-    df_injection = result_df.loc[result_df['execution_type'] == "injection"]
+def get_some_connected_subgraphs(G, circuit_size):
+    con_comp = [c for c in sorted(nx.connected_components(G), key=len, reverse=True)]
+    def recursive_local_expand(node_set, possible, excluded, results, max_size):
+        if len([i for i in results if len(i) == len(node_set)]) < max_size:
+            results.append(node_set)
+        if len(node_set) == max_size:
+            return
+        for j in possible - excluded:
+            new_node_set = node_set | {j}
+            excluded = excluded | {j}
+            new_possible = (possible | set(G.neighbors(j))) - excluded
+            if len([i for i in results if len(i) == len(node_set)]) < max_size:
+                recursive_local_expand(new_node_set, new_possible, excluded, results, max_size)
+   
+    results = []
+    for cc in con_comp:
+        max_size = min(circuit_size/2, 10)
 
-    sns.set_theme(style="whitegrid", palette="deep")    
-    plt.figure(figsize=(20,10))
+        excluded = set()
+        for i in G:
+            excluded.add(i)
+            recursive_local_expand({i}, set(G.neighbors(i)) - excluded, excluded, results, max_size)
 
-    # Golden
-    golden_counts = df_golden["counts"].iloc[0]
-    golden_bitstring = max(golden_counts, key=golden_counts.get)
-    golden_y = []
-    time_steps = df_injection["time_step"].drop_duplicates()
-    golden_logical_error = compare_function(golden_counts, golden_counts)
-    for time_step in time_steps:
-        golden_y.append(golden_logical_error)
-    plt.plot(time_steps, golden_y, label=f"Golden", color="gold")
+    results.sort(key=len)
 
-    df_injection_point = [x for _, x in df_injection.groupby(["injection_point"])]
-    for df in df_injection_point:
-        injected_qubit = df["injection_point"].iloc[0][0]
-        plt.plot(df["time_step"], df["logical_error"], label=f"Transient on qubit {injected_qubit}") 
-    plt.xlabel(f'discretised time (shots)')
-    plt.ylabel(f'{compare_function.__name__}')
-    plt.title(f'Transient logical error evolution over time')
-    plt.legend()
-    
-    circuit_name = re.sub("[^a-zA-Z]", "", df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/transient_error_over_time_{compare_function.__name__}_{circuit_name} on {df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename)
-    plt.close()
-
-def plot_injection_logical_error(result_df, compare_function_generator, log=True):
-    """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) generator over the injection probability of each point. The results are saved under the ./plots directory."""
-    plot_df_list = []
-    df_circuit_name = [x for _, x in result_df.groupby(["circuit_name"])]
-    for df in df_circuit_name:
-        golden_counts = df.loc[df['execution_type'] == "golden"]
-        d = make_tuple(re.sub("[^0-9(),]", "", golden_counts["circuit_name"].values[0]))
-        compare_error_function = compare_function_generator(d=d)
-        df["logical_error"] = df["counts"].apply(lambda row: compare_error_function(golden_counts, row))
-        df.sort_values(by=['time_step'])
-        inj_logical_error = df.loc[df['execution_type'] == "injection"]
-        plot_df_list.append(inj_logical_error[["circuit_name", "device_backend_name", "root_inj_probability", "logical_error"]])
-        
-    linestyle = {"ideal":"--", "noisy":"-"}
-    colours = mcp.gen_color(cmap="cool", n=len(plot_df_list))
-    sns.set_theme(style="whitegrid", palette="deep")
-    plt.figure(figsize=(20,10))
-
-    for index, df in enumerate(plot_df_list):
-        plt.plot(df["root_inj_probability"], df["logical_error"], label=df["circuit_name"].iloc[0], 
-                    marker="s", color=colours[index], linestyle="-")
-        
-    plt.plot(df["root_inj_probability"], df["root_inj_probability"], label=f"Breakeven performance", 
-                marker="d", color="red", linestyle="--")
-    if log:
-        plt.yscale('log')
-        plt.xscale('log')
-    plt.xlabel(f'injection probability')
-    plt.ylabel(f'{compare_function_generator().__name__}')
-    plt.title(f'{df["circuit_name"].iloc[0]} on {df["device_backend_name"].iloc[0]}')
-    plt.legend()
-
-    circuit_name = re.sub("[^a-zA-Z]", "", df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/logical_physical_error_{compare_function_generator().__name__}_{circuit_name} on {df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename)
-    plt.close()
-
-def plot_histogram_error(result_df, compare_function):
-    """Plot the results of a <circuit_name>_histogram_affected_qubits results file. The results are saved under the ./plots directory."""
-    
-    def get_label(row):
-        return f"{row['device_backend_name']} {'damped' if row['spread_depth'] != 0 else 'constant'}"
-
-    def get_len(row):
-        return len(row["injection_point"])
-
-    # code distance analysis
-    df_device_backend_name = [x for _, x in result_df.groupby(["device_backend_name"])]
-    merged_df = pd.DataFrame()
-    for df_backend in df_device_backend_name:
-        golden_counts = df_backend.loc[df_backend['execution_type'] == "golden"].head(1)
-        df_backend["logical_error"] = df_backend["counts"].apply(lambda row: compare_function(golden_counts, row))
-        df_backend.sort_values(by=['time_step'])
-        golden_counts = df_backend.loc[df_backend['execution_type'] == "golden"].head(1) #["logical_error"]
-        df_backend = df_backend.loc[df_backend['execution_type'] == "injection"] #["logical_error"]
-        df_backend["label"] = df_backend.apply(get_label, axis=1)
-        df_backend["total_injected_qubits"] = df_backend.apply(get_len, axis=1)
-        merged_df = pd.concat([merged_df, df_backend], ignore_index=True)
-
-    df = pd.pivot(merged_df, index="label", columns="total_injected_qubits", values="logical_error")
-    df = df.loc[:, ~(df.eq(1) | df.isna()).all()]
-    n_unique_injection_points = len(df.columns)
-    df = df.unstack().reset_index(name="logical_error")
-    sns.set_theme(style="whitegrid", palette="deep")
-    g = sns.catplot(x="total_injected_qubits", y="logical_error", hue="label", data=df, kind="bar", legend_out=False, height=10, aspect=n_unique_injection_points/10)
-
-    circuit_name = re.sub("[^a-zA-Z]", "", merged_df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/histogram_spread_depth_error_{compare_function.__name__}_{circuit_name} on {merged_df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename)
-    plt.close()
-
-def plot_3d_surface(result_df, compare_function, ip=1):
-    """Plot the results of a <circuit_name>_surfaceplot results file. The results are saved under the ./plots directory."""
-
-    df_data_list = []
-    df_noise_model = [x for _, x in result_df.groupby(["noise_model"])]
-    for df in df_noise_model:
-        golden_counts = df.loc[df['execution_type'] == "golden"]
-        df["logical_error"] = df["counts"].apply(lambda row: compare_function(golden_counts, row))
-        df.sort_values(by=['time_step'])
-        inj_logical_error = df.loc[df['execution_type'] == "injection"][["noise_model", "root_inj_probability", "logical_error"]]
-        inj_logical_error["physical_error"] = inj_logical_error.apply(lambda row: float(re.findall("-?[\d.]+(?:e-?\d+)?", row["noise_model"])[0]), axis=1)
-        df_data_list.append(inj_logical_error)
-
-    df = pd.concat(df_data_list, ignore_index=True)
-    sns.set_style("whitegrid", {'axes.grid' : False})
-    fig = plt.figure(figsize=(12, 10))
-    ax = fig.add_subplot(projection='3d')
-
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(log_tick_formatter))
-    ax.xaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-    ax.invert_xaxis()
-
-    # ax.yaxis.set_major_formatter(mticker.FuncFormatter(percentage_tick_formatter_no_decimal))
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(log_tick_formatter))
-    ax.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-
-    ax.zaxis.set_major_formatter(mticker.FuncFormatter(percentage_tick_formatter))
-    ax.zaxis.set_major_locator(mticker.MaxNLocator(integer=True))
-
-    x1 = 10**(np.linspace(np.log10(df['physical_error'].min()), np.log10(df['physical_error'].max()), ip*len(df['physical_error'].drop_duplicates()) ))
-    # y1 = np.linspace(df['root_inj_probability'].min(), df['root_inj_probability'].max(), ip*len(df['root_inj_probability'].drop_duplicates()))
-    y1 = 10**(np.linspace(np.log10(df['root_inj_probability'].min()), np.log10(df['root_inj_probability'].max()), ip*len(df['root_inj_probability'].drop_duplicates()) ))
-    X, Y = np.meshgrid(x1, y1)
-    Z = griddata(((df['physical_error']), df['root_inj_probability']), df['logical_error'], (X, Y), method="linear")
-    g = ax.plot_surface(np.log10(X), np.log10(Y), Z, rstride=1, cstride=1, cmap="Spectral_r", linewidth=0.0, antialiased=True)
-
-    # g = ax.plot_trisurf(np.log10(df.physical_error), df.root_inj_probability, df.logical_error, cmap="Spectral_r", linewidth=0.2, antialiased=True)
-    ax.set_xlabel('\nPhysical error rate')
-    ax.set_ylabel('\nInjection probability')
-    ax.set_zlabel('\nLogical error', labelpad=12)
-
-    circuit_name = re.sub("[^a-zA-Z]", "", result_df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/3d_surfaceplot_{compare_function.__name__}_{circuit_name} on {result_df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename)
-    plt.close()
-
-def plot_topology_injection_point_error(result_df, compare_function):
-    """Plot the results of a <circuit_name>_topologies_analysis results file. The results are saved under the ./plots directory."""
-    vmax = 0.0
-    graphs_with_data = []
-    df_device_backend_name = [x for _, x in result_df.groupby(["device_backend_name"])]
-    for df_all_nodes in df_device_backend_name:
-        golden_counts = df_all_nodes.loc[df_all_nodes['execution_type'] == "golden"]
-        df_all_nodes["logical_error"] = df_all_nodes["counts"].apply(lambda row: compare_function(golden_counts, row))
-        df_all_nodes.sort_values(by=['time_step'])
-        df_inj_point = df_all_nodes.loc[df_all_nodes['execution_type'] == "injection"][["injection_point", "logical_error"]].groupby(["injection_point"], as_index=False).median()
-        max_average_node_logical_error = df_inj_point["logical_error"].max()
-        if max_average_node_logical_error > vmax:
-            vmax = max_average_node_logical_error
-        coupling_map = df_all_nodes["coupling_map"].iloc[0]
-        G = nx.Graph(coupling_map)
-        for node_index in list(G):
-            G.nodes[node_index]["logical_error"] = 0
-        for index, row in df_inj_point.iterrows():
-            node_logical_error = row["logical_error"] if not row.empty else 0
-            node_index = row["injection_point"][0]
-            G.nodes[node_index]["logical_error"] = node_logical_error
-        p2v_map = golden_counts["p2v_map"].iloc[0]
-        graphs_with_data.append((df_all_nodes["device_backend_name"].iloc[0], G, p2v_map))
-
-    nc = int(np.ceil(np.sqrt(len(graphs_with_data))))
-    nr = int(np.ceil(len(graphs_with_data)/nc))
-    fig = plt.figure(figsize=(12*nc, 10*nr))
-    plt.clf()
-    plt.axis('off')
-    fig, ax = plt.subplots(nr, nc, num=1)
-
-    # drawing nodes and edges separately so we can capture collection for colobar
-    for i, (name, G, p2v_map) in enumerate(graphs_with_data):
-        ix = np.unravel_index(i, ax.shape)
-        pos = nx.nx_agraph.graphviz_layout(G, prog="neato", args="-Gepsilon=.00000000001 -Glen=200 -Gmaxiter=100 -Goverlap_scaling=20 -Goverlap='false' -Gsep=+50") if name!="linear" else nx.spiral_layout(G, equidistant=True)
-        ec = nx.draw_networkx_edges(G, pos, alpha=0.4, ax=ax[ix])
-        colors = nx.get_node_attributes(G, "logical_error")
-        
-        # nc = nx.draw_networkx_nodes(G, pos, node_color=colors, node_size=250, cmap=plt.cm.Spectral_r, ax=ax[ix], vmin=0.0, vmax=vmax)
-        layout = {k:v.replace('t_', '').replace('tq_', '').replace('ancilla', 'a').replace('data', 'd') for k,v in p2v_map.items()}
-        ancilla_nodelist = [k for k,v in layout.items() if "a" in v]
-        measure_nodelist = [k for k,v in layout.items() if "m" in v]
-        data_nodelist = [k for k,v in layout.items() if "d" in v]
-        nc = nx.draw_networkx_nodes(G, pos, node_color=[colors[n] for n in ancilla_nodelist], node_size=1000, cmap=plt.cm.Spectral_r, nodelist=ancilla_nodelist, node_shape='p', edgecolors="black", ax=ax[ix], vmin=0.0, vmax=vmax)
-        nc = nx.draw_networkx_nodes(G, pos, node_color=[colors[n] for n in measure_nodelist], node_size=1000, cmap=plt.cm.Spectral_r, nodelist=measure_nodelist, node_shape='s', edgecolors="black", ax=ax[ix], vmin=0.0, vmax=vmax)
-        nc = nx.draw_networkx_nodes(G, pos, node_color=[colors[n] for n in data_nodelist], node_size=1000, cmap=plt.cm.Spectral_r, nodelist=data_nodelist, node_shape='o', edgecolors="black", ax=ax[ix], vmin=0.0, vmax=vmax)
-
-        nodes = list(G)
-        light_text = [n for n, name in layout.items() if (G.nodes[n]['logical_error'] < 0.25*vmax or G.nodes[n]['logical_error'] > 0.75*vmax)]
-        nx.draw_networkx_labels(G, pos, labels={n:name for n, name in layout.items() if n not in light_text}, font_color="black", ax=ax[ix])
-        nx.draw_networkx_labels(G, pos, labels={n:name for n, name in layout.items() if n in light_text}, font_color="white", ax=ax[ix])
-        ax[ix].set_title(name, fontsize=25)
-
-    for i in range(i+1, len(ax.flatten())):
-        ix = np.unravel_index(i, ax.shape)
-        ax[ix].set_axis_off()
-
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.Spectral_r, norm=plt.Normalize(vmin=0.0, vmax=vmax))
-    sm._A = []
-    cbar = fig.colorbar(sm, ax=ax.ravel().tolist())
-    cbar.ax.tick_params(labelsize=25) 
-    
-    circuit_name = re.sub("[^a-zA-Z]", "", result_df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/topology_injection_point_{compare_function.__name__}_{circuit_name} on {result_df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename)
-    plt.close()
-
-def plot_minimum_inj_qubits(result_df, compare_function_generator, threshold_min=0.0, threshold_catasptrophic=0.5):
-    """Plot the results of a <circuit_name> minimum_inj_qubits results file. The results are saved under the ./plots directory."""
-
-    def get_len(row):
-        return len(row["injection_point"])
-
-    # code distance analysis
-    df_device_circuit_name = [x for _, x in result_df.groupby(["circuit_name"])]
-    merged_df_list = []
-    for df_circuit_name in df_device_circuit_name:
-        golden_counts = df_circuit_name.loc[df_circuit_name['execution_type'] == "golden"].head(1)
-        d = make_tuple(re.sub("[^0-9(),]", "", golden_counts["circuit_name"].values[0]))
-        compare_function = compare_function_generator(d=d)
-        # Add compare fn
-        df_circuit_name["logical_error"] = df_circuit_name["counts"].apply(lambda row: compare_function(golden_counts, row))
-        golden_counts = df_circuit_name.loc[df_circuit_name['execution_type'] == "golden"].head(1)
-        df_circuit_name = df_circuit_name.loc[df_circuit_name['execution_type'] == "injection"]
-        df_circuit_name["total_injected_qubits"] = df_circuit_name.apply(get_len, axis=1)
-        df_circuit_name.reset_index(drop=True, inplace=True)
-        df_circuit_name = df_circuit_name[df_circuit_name.columns.intersection(["circuit_name", "device_backend_name", "total_injected_qubits", "logical_error"])]
-        df_circuit_name = df_circuit_name.groupby(["circuit_name", "device_backend_name", "total_injected_qubits"], as_index=False).agg({'logical_error': ['mean', 'median', 'std']}).reset_index()
-        df_circuit_name.reset_index(drop=True, inplace=True)
-        df_circuit_name.columns = ["_".join(col_name).rstrip('_') for col_name in df_circuit_name.columns]
-        
-        df_circuit_name.sort_values(by=['total_injected_qubits'])
-        df_circuit_name = df_circuit_name.loc[df_circuit_name["logical_error_median"] > threshold_min]
-        df_circuit_name["d"] = d[0]
-        df_circuit_name["label"] = "Minimum observable error"
-        merged_df_list.append(df_circuit_name.head(1))
-        df_circuit_name = df_circuit_name.loc[df_circuit_name["logical_error_median"] > threshold_catasptrophic]
-        df_circuit_name["label"] = "Unrecoverable error"
-        merged_df_list.append(df_circuit_name.head(1))
-
-    merged_df = pd.concat(merged_df_list, ignore_index=True)
-    merged_df.sort_values(by=["d"], inplace=True)
-    sns.set_theme(style="whitegrid", palette="deep", rc={'figure.figsize':(20,10)})
-    sns.barplot(merged_df,  y="circuit_name", x="total_injected_qubits", hue="label", orient="h")
-
-    circuit_name = re.sub("[^a-zA-Z]", "", merged_df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/min_injected_qubits_{compare_function.__name__}_{circuit_name} on {merged_df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename)
-    plt.close()
-
-def log_tick_formatter(val, pos=None):
-    return f'$10^{{{val:.0f}}}$'
-
-def percentage_tick_formatter_no_decimal(val, pos=None):
-    return f'${{{val*100:.0f}}} \%$'
-
-def percentage_tick_formatter(val, pos=None):
-    return f'     ${{{val*100:.1f}}} \%$'
-
-# %%
+    return results
