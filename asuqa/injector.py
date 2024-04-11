@@ -459,29 +459,12 @@ def count_collapses_error(golden_counts, inj_counts):
         total_measurements += len(bitstring)*count
     return (zeros_measured / total_measurements) * len(bitstring)
 
-def get_some_connected_subgraphs(G, circuit_size):
-    con_comp = [c for c in sorted(nx.connected_components(G), key=len, reverse=True)]
-    def recursive_local_expand(node_set, possible, excluded, results, max_size):
-        if len([i for i in results if len(i) == len(node_set)]) < max_size:
-            results.append(node_set)
-        if len(node_set) == max_size:
-            return
-        for j in possible - excluded:
-            new_node_set = node_set | {j}
-            excluded = excluded | {j}
-            new_possible = (possible | set(G.neighbors(j))) - excluded
-            if len([i for i in results if len(i) == len(node_set)]) < max_size:
-                recursive_local_expand(new_node_set, new_possible, excluded, results, max_size)
-   
+def get_some_connected_subgraphs(G, group_size):
     results = []
-    for cc in con_comp:
-        max_size = min(circuit_size/2, 10)
 
-        excluded = set()
-        for i in G:
-            excluded.add(i)
-            recursive_local_expand({i}, set(G.neighbors(i)) - excluded, excluded, results, max_size)
-
-    results.sort(key=len)
+    for root in G.nodes:    
+        edges = nx.bfs_edges(G, root)
+        bfs_ordered_nodes = [root] + [v for u, v in edges]
+        results.append(bfs_ordered_nodes[0:group_size])
 
     return results

@@ -47,49 +47,7 @@ def plot_transient(result_df, compare_function):
     plt.close()
     plt.clf()
 
-def plot_injection_logical_error(result_df, compare_function_generator, log=True):
-    """Plot the results of an injection campaign according to the supplied compare_function(golden_counts, inj_counts) generator over the injection probability of each point. The results are saved under the ./plots directory."""
-    sns.set_theme(font_scale=1.7)
-    sns.set_style("whitegrid", )
-    plot_df_list = []
-    df_circuit_name = [x for _, x in result_df.groupby(["circuit_name"])]
-    for df in df_circuit_name:
-        golden_counts = df.loc[df['execution_type'] == "golden"]
-        d = make_tuple(re.sub("[^0-9(),]", "", golden_counts["circuit_name"].values[0]))
-        compare_error_function = compare_function_generator(d=d)
-        df["logical_error"] = df["counts"].mapply(lambda row: compare_error_function(golden_counts, row))
-        df.sort_values(by=['time_step'])
-        inj_logical_error = df.loc[df['execution_type'] == "injection"]
-        plot_df_list.append(inj_logical_error[["circuit_name", "device_backend_name", "root_inj_probability", "logical_error"]])
-        
-    linestyle = {"ideal":"--", "noisy":"-"}
-    colours = mcp.gen_color(cmap="cool", n=len(plot_df_list))
-    sns.set_theme(style="whitegrid", palette="deep")
-    plt.figure(figsize=(20,10))
-
-    for index, df in enumerate(plot_df_list):
-        plt.plot(df["root_inj_probability"], df["logical_error"], label=df["circuit_name"].iloc[0], 
-                    marker="s", color=colours[index], linestyle="-")
-        
-    plt.plot(df["root_inj_probability"], df["root_inj_probability"], label=f"Breakeven performance", 
-                marker="d", color="red", linestyle="--")
-    if log:
-        plt.yscale('log')
-        plt.xscale('log')
-    plt.xlabel(f'injection probability')
-    plt.ylabel(f'{compare_function_generator().__name__}')
-    plt.title(f'{df["circuit_name"].iloc[0]} on {df["device_backend_name"].iloc[0]}')
-    plt.legend()
-
-    circuit_name = re.sub("[^a-zA-Z]", "", df["circuit_name"].iloc[0])
-    filename = f'plots/{circuit_name}/logical_physical_error_{compare_function_generator().__name__}_{circuit_name} on {df["device_backend_name"].iloc[0]}.pdf'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
-    plt.savefig(filename, bbox_inches='tight')
-    plt.close()
-    plt.clf()
-
-def plot_histogram_error(result_df, compare_function, subgroup_sizes):
+def plot_spatial_spread_analysis(result_df, compare_function, subgroup_sizes):
     """Plot the results of a <circuit_name>_histogram_affected_qubits results file. The results are saved under the ./plots directory."""
 
     def get_label(row):
@@ -137,7 +95,7 @@ def plot_histogram_error(result_df, compare_function, subgroup_sizes):
     plt.close()
     plt.clf()
 
-def plot_3d_surface(result_df, compare_function, ip=1):
+def plot_noise_radiation_analysis(result_df, compare_function, ip=1):
     """Plot the results of a <circuit_name>_surfaceplot results file. The results are saved under the ./plots directory."""
     sns.set_theme(font_scale=1.7)
     sns.set_style("whitegrid", )
@@ -189,7 +147,7 @@ def plot_3d_surface(result_df, compare_function, ip=1):
     plt.close()
     plt.clf()
 
-def plot_topology_injection_point_error(result_df, compare_function):
+def plot_architecture_analysis(result_df, compare_function):
     """Plot the results of a <circuit_name>_topologies_analysis results file. The results are saved under the ./plots directory."""
     sns.set_theme(font_scale=1.7)
     sns.set_style("whitegrid", {'axes.grid' : False})
@@ -267,7 +225,7 @@ def plot_topology_injection_point_error(result_df, compare_function):
     plt.close()
     plt.clf()
 
-def plot_minimum_inj_qubits(result_df, compare_function_generator, threshold_min=0.0, threshold_catasptrophic=0.5):
+def plot_code_distance_analysis(result_df, compare_function_generator):
     """Plot the results of a <circuit_name> minimum_inj_qubits results file. The results are saved under the ./plots directory."""
 
     def get_len(row):

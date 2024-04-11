@@ -9,6 +9,7 @@ def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
     log(f"Running Spreading fault vs. erasure fault campaign on XXZZ Qubit")
+    read_from_file = True
 
     ##################################################################### Transient error controls #####################################################################
     transient_error_function = reset_to_zero
@@ -30,42 +31,40 @@ def main():
     ############################################################ Spreading fault vs. erasure fault analysis ############################################################
     ts = time()
     physical_error = 0.01
-    aq_object = xxzz_qubit(d=(3,3))
-    aq_circuit = aq_object.circ
+    qt_object = xxzz_qubit(d=(3,3))
+    circuit = qt_object.circ
     compare_error_function = get_decoded_logical_error_xxzz(d=(3,3))
-    aq_injection_point = 2
-    aq_spread_depths = [0, 10]
-    aq_device_backends = [CustomBackend(active_qubits=range(aq_circuit.num_qubits), coupling_map=mesh_edge_list, backend_name="Mesh")]
+    injection_point = 2
+    spread_depths = [0, 10]
+    device_backends = [CustomBackend(active_qubits=range(circuit.num_qubits), coupling_map=mesh_edge_list, backend_name="Mesh")]
     
-    read_from_file = True
     if not read_from_file:
         spread_depth_list_dict = []
-        for aq_backend in aq_device_backends:
-            aq_transpiled_circuit = transpile(aq_circuit, aq_backend, scheduling_method='asap', seed_transpiler=42)
-            noise_model = bitphase_flip_noise_model(physical_error, aq_transpiled_circuit.num_qubits)
-            bfs_ordered_inj_list = [aq_injection_point] + [e for (s, e) in nx.algorithms.bfs_tree(nx.Graph(aq_backend.coupling_map), aq_injection_point).edges()]
+        for device_backend in device_backends:
+            t_circuit = transpile(circuit, device_backend, scheduling_method='asap', seed_transpiler=42)
+            noise_model = bitphase_flip_noise_model(physical_error, t_circuit.num_qubits)
+            bfs_ordered_inj_list = [injection_point] + [e for (s, e) in nx.algorithms.bfs_tree(nx.Graph(device_backend.coupling_map), injection_point).edges()]
             injection_points = [ bfs_ordered_inj_list[0:limit] for limit in range(1, len(bfs_ordered_inj_list) + 1) ]
 
-            result_df = injection_campaign(circuits=aq_transpiled_circuit,
-                                                    device_backends=aq_backend,
-                                                    noise_models=noise_model,
-                                                    injection_points=injection_points,
-                                                    transient_error_functions = transient_error_function,
-                                                    spread_depths = aq_spread_depths,
-                                                    damping_functions = damping_function,
-                                                    transient_error_duration_ns = transient_error_duration_ns,
-                                                    n_quantised_steps = 1,
-                                                    processes=processes,
-                                                            )
+            result_df = injection_campaign(circuits=t_circuit,
+                                           device_backends=device_backend,
+                                           noise_models=noise_model,
+                                           injection_points=injection_points,
+                                           transient_error_functions = transient_error_function,
+                                           spread_depths = spread_depths,
+                                           damping_functions = damping_function,
+                                           transient_error_duration_ns = transient_error_duration_ns,
+                                           n_quantised_steps = 1,
+                                           processes=processes)
             spread_depth_list_dict.append(result_df)
         concatenated_df = pd.concat(spread_depth_list_dict, ignore_index=True)
         log(f"Affected qubits analysis done in {timedelta(seconds=time() - ts)}")
-        with bz2.BZ2File(f"./results/{aq_circuit.name} histogram_affected_qubits", 'wb') as handle:
+        with bz2.BZ2File(f"./results/{circuit.name} spatial_spread_analysis", 'wb') as handle:
             pickle.dump(concatenated_df, handle)
     else:
-        with bz2.BZ2File(f"./results/{aq_circuit.name} histogram_affected_qubits", 'rb') as handle:
+        with bz2.BZ2File(f"./results/{circuit.name} spatial_spread_analysis", 'rb') as handle:
             concatenated_df = pickle.load(handle)
-    plot_histogram_error(concatenated_df, compare_error_function, subgroup_sizes=[1, 9, 10, 14, 15])
+    plot_spatial_spread_analysis(concatenated_df, compare_error_function, subgroup_sizes=[1, 9, 10, 14, 15])
     
     log(f"Campaign finished at {datetime.fromtimestamp(time())}")
 

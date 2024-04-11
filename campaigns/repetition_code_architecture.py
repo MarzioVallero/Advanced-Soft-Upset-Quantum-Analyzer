@@ -72,24 +72,22 @@ def main():
     if not read_from_file:
         ts = time()
         result_df = injection_campaign(circuits=args_dict_of_lists["circuits"], 
-                                            device_backends=args_dict_of_lists["device_backends"],
-                                            noise_models=args_dict_of_lists["noise_models"],
-                                            injection_points=ta_injection_points,
-                                            transient_error_functions = transient_error_function,
-                                            spread_depths = spread_depth,
-                                            damping_functions = damping_function,
-                                            transient_error_duration_ns = transient_error_duration_ns,
-                                            n_quantised_steps = n_quantised_steps,
-                                            processes=processes,
-                                            )
-
+                                       device_backends=args_dict_of_lists["device_backends"],
+                                       noise_models=args_dict_of_lists["noise_models"],
+                                       injection_points=ta_injection_points,
+                                       transient_error_functions = transient_error_function,
+                                       spread_depths = spread_depth,
+                                       damping_functions = damping_function,
+                                       transient_error_duration_ns = transient_error_duration_ns,
+                                       n_quantised_steps = n_quantised_steps,
+                                       processes=processes)
         log(f"Topological analysis done in {timedelta(seconds=time() - ts)}")
-        with bz2.BZ2File(f"./results/{ta_target_circuit.name} topologies_analysis", 'wb') as handle:
+        with bz2.BZ2File(f"./results/{ta_target_circuit.name} architecture_analysis", 'wb') as handle:
             pickle.dump(result_df, handle)
     else:
-        with bz2.BZ2File(f"./results/{ta_target_circuit.name} topologies_analysis", 'rb') as handle:
+        with bz2.BZ2File(f"./results/{ta_target_circuit.name} architecture_analysis", 'rb') as handle:
             result_df = pickle.load(handle)
-    plot_topology_injection_point_error(result_df, compare_error_function)
+    plot_architecture_analysis(result_df, compare_error_function)
 
     log(f"Campaign finished at {datetime.fromtimestamp(time())}")
 
