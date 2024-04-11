@@ -6,40 +6,79 @@ dependencies:
   - _libgcc_mutex=0.1=main
   - _openmp_mutex=5.1=1_gnu
   - asttokens=2.4.1=pyhd8ed1ab_0
+  - atk-1.0=2.36.0=ha1a6a79_0
   - backports=1.0=pyhd8ed1ab_3
   - backports.functools_lru_cache=1.6.5=pyhd8ed1ab_0
-  - ca-certificates=2023.7.22=hbcca054_0
+  - ca-certificates=2023.11.17=hbcca054_0
+  - cairo=1.16.0=hb05425b_5
   - comm=0.1.4=pyhd8ed1ab_0
   - debugpy=1.6.7=py39h6a678d5_0
   - decorator=5.1.1=pyhd8ed1ab_0
   - entrypoints=0.4=pyhd8ed1ab_0
   - exceptiongroup=1.1.3=pyhd8ed1ab_0
   - executing=2.0.1=pyhd8ed1ab_0
+  - expat=2.2.10=h9c3ff4c_0
+  - font-ttf-dejavu-sans-mono=2.37=hab24e00_0
+  - font-ttf-inconsolata=3.000=h77eed37_0
+  - font-ttf-source-code-pro=2.038=h77eed37_0
+  - font-ttf-ubuntu=0.83=h77eed37_1
+  - fontconfig=2.14.1=hef1e5e3_0
+  - fonts-conda-ecosystem=1=0
+  - fonts-conda-forge=1=0
+  - freetype=2.10.4=h0708190_1
+  - fribidi=1.0.10=h36c2ea0_0
+  - gdk-pixbuf=2.42.10=h5eee18b_0
+  - glib=2.69.1=he621ea3_2
+  - gobject-introspection=1.72.0=py39hbb6d50b_2
+  - graphite2=1.3.14=h295c915_1
+  - graphviz=2.50.0=h3cd0ef9_0
+  - gtk2=2.24.33=h73c1081_2
+  - gts=0.7.6=h08bb679_0
+  - harfbuzz=4.3.0=hf52aaf7_1
+  - icu=58.2=hf484d3e_1000
   - ipykernel=6.26.0=pyhf8b6a83_0
   - ipython=8.17.2=pyh41d4057_0
   - jedi=0.19.1=pyhd8ed1ab_0
+  - jpeg=9e=h166bdaf_1
   - jupyter_client=7.3.4=pyhd8ed1ab_0
   - jupyter_core=5.5.0=py39hf3d152e_0
   - ld_impl_linux-64=2.38=h1181459_1
+  - lerc=3.0=h295c915_0
+  - libdeflate=1.17=h5eee18b_1
   - libffi=3.4.4=h6a678d5_0
   - libgcc-ng=11.2.0=h1234567_1
+  - libgd=2.3.3=h695aa2c_1
   - libgomp=11.2.0=h1234567_1
+  - libpng=1.6.39=h5eee18b_0
+  - librsvg=2.54.4=h36cc946_2
   - libsodium=1.0.18=h36c2ea0_1
   - libstdcxx-ng=11.2.0=h1234567_1
+  - libtiff=4.5.1=h6a678d5_0
+  - libtool=2.4.6=h6a678d5_1009
+  - libwebp-base=1.3.2=h5eee18b_0
+  - libxcb=1.15=h7f8727e_0
+  - libxml2=2.9.14=h74e7548_0
+  - lz4-c=1.9.4=h6a678d5_0
   - matplotlib-inline=0.1.6=pyhd8ed1ab_0
   - ncurses=6.4=h6a678d5_0
   - nest-asyncio=1.5.8=pyhd8ed1ab_0
+  - ninja=1.10.2=h06a4308_5
+  - ninja-base=1.10.2=hd09550d_5
   - openssl=3.0.12=h7f8727e_0
   - packaging=23.2=pyhd8ed1ab_0
+  - pango=1.50.7=h05da053_0
   - parso=0.8.3=pyhd8ed1ab_0
+  - pcre=8.45=h9c3ff4c_0
   - pexpect=4.8.0=pyh1a96a4e_2
   - pickleshare=0.7.5=py_1003
   - pip=23.3=py39h06a4308_0
+  - pixman=0.40.0=h7f8727e_1
   - platformdirs=4.0.0=pyhd8ed1ab_0
   - prompt_toolkit=3.0.40=hd8ed1ab_0
   - ptyprocess=0.7.0=pyhd3deb0d_0
   - pure_eval=0.2.2=pyhd8ed1ab_0
   - pygments=2.16.1=pyhd8ed1ab_0
+  - pygraphviz=1.9=py39h5eee18b_1
   - python=3.9.18=h955ad1f_0
   - python-dateutil=2.8.2=pyhd8ed1ab_0
   - python_abi=3.9=2_cp39
@@ -59,46 +98,110 @@ dependencies:
   - zeromq=4.3.4=h2531618_0
   - zlib=1.2.13=h5eee18b_0
   - pip:
+      - aenum==3.1.15
+      - aiobotocore==2.9.1
+      - aiohttp==3.9.1
+      - aioitertools==0.11.0
+      - aiosignal==1.3.1
+      - aliyun-python-sdk-core==2.14.0
+      - aliyun-python-sdk-kms==2.16.2
+      - argcomplete==3.2.1
+      - async-timeout==4.0.3
+      - attrs==23.2.0
+      - botocore==1.33.13
+      - cachetools==5.3.2
       - certifi==2023.7.22
       - cffi==1.16.0
       - charset-normalizer==3.3.0
+      - click==8.1.7
+      - cloudpickle==3.0.0
       - contourpy==1.1.1
+      - crcmod==1.7
       - cryptography==41.0.4
       - cuquantum-cu12==23.6.1
       - custatevec-cu12==1.4.1
       - cutensor-cu12==1.7.0
       - cutensornet-cu12==2.2.1
       - cycler==0.12.1
-      - dill==0.3.7
+      - cython==3.0.8
+      - dask==2024.3.1
+      - dask-expr==1.0.5
+      - dill==0.3.8
+      - docstring-parser==0.15
+      - etcd-distro==3.5.1
       - fonttools==4.43.1
+      - frozenlist==1.4.1
+      - fsspec==2023.12.2
+      - google-auth==2.26.2
+      - graphscope==0.25.0
+      - graphscope-client==0.25.0
+      - gremlinpython==3.7.0
+      - grpcio==1.60.0
+      - grpcio-tools==1.60.0
+      - gs-apps==0.25.0
+      - gs-coordinator==0.25.0
+      - gs-engine==0.25.0
+      - gs-include==0.25.0
+      - hdfs3==0.3.1
       - idna==3.4
+      - importlib-metadata==7.1.0
       - importlib-resources==6.1.0
+      - isodate==0.6.1
+      - jmespath==0.10.0
+      - jsonpickle==3.0.2
       - kiwisolver==1.4.5
+      - kubernetes==29.0.0
+      - lazy-import==0.2.2
+      - locket==1.0.0
+      - makefun==1.15.2
+      - mapply==0.1.25
+      - markdown-it-py==3.0.0
       - matplotlib==3.8.0
+      - mdurl==0.1.2
       - more-itertools==10.1.0
       - mpmath==1.3.0
       - mqt-ddsim==1.20.1
+      - msgpack==1.0.7
+      - multidict==6.0.4
+      - multiprocess==0.70.16
       - mycolorpy==1.5.1
-      - networkx==3.2.1
+      - mypy-protobuf==3.5.0
+      - neo4j==5.10.0
+      - networkx==2.8
       - numpy==1.26.1
       - nvidia-cublas-cu12==12.3.2.9
       - nvidia-cuda-runtime-cu12==12.3.52
       - nvidia-cusolver-cu12==11.5.3.52
       - nvidia-cusparse-cu12==12.1.3.153
       - nvidia-nvjitlink-cu12==12.3.52
+      - oauthlib==3.2.2
       - objprint==0.2.3
       - opt-einsum==3.3.0
-      - pandas==2.1.3
+      - orjson==3.9.10
+      - oss2==2.18.4
+      - pandas==2.0.3
+      - partd==1.4.1
+      - pathos==0.3.2
       - pbr==5.11.1
       - pillow==10.1.0
       - ply==3.11
+      - pox==0.3.4
+      - ppft==1.7.6.8
+      - prometheus-client==0.19.0
       - prompt-toolkit==3.0.39
+      - protobuf==4.25.2
       - psutil==5.9.6
+      - pyarrow==14.0.2
+      - pyasn1==0.5.1
+      - pyasn1-modules==0.3.0
       - pycparser==2.21
+      - pycryptodome==3.20.0
       - pylatexenc==2.10
       - pyparsing==3.1.1
+      - pysimdjson==5.0.2
       - pyspnego==0.10.2
       - pytz==2023.3.post1
+      - pyyaml==6.0.1
       - qiskit==0.44.2
       - qiskit-aer==0.13.0
       - qiskit-aer-gpu==0.13.0
@@ -109,17 +212,33 @@ dependencies:
       - quantum-gates==1.0.4
       - requests==2.31.0
       - requests-ntlm==1.2.0
+      - requests-oauthlib==1.3.1
       - retworkx==0.13.2
+      - rich==13.7.0
+      - rsa==4.9
       - rustworkx==0.13.2
+      - s3fs==2023.12.2
       - scipy==1.11.3
       - seaborn==0.13.0
+      - simple-parsing==0.1.4
+      - sortedcontainers==2.4.0
       - stack-data==0.6.3
       - stevedore==5.1.0
+      - swifter==1.4.0
       - symengine==0.9.2
       - sympy==1.12
+      - toolz==0.12.1
       - tqdm==4.66.1
+      - treelib==1.7.0
+      - types-protobuf==4.24.0.20240106
       - tzdata==2023.3
-      - urllib3==2.0.7
+      - urllib3==1.26.18
+      - vineyard==0.19.3
+      - vineyard-bdist==0.19.3
+      - vineyard-io==0.20.0
       - websocket-client==1.6.4
       - websockets==11.0.3
+      - wrapt==1.16.0
+      - yarl==1.9.4
       - zipp==3.17.0
+      - zstd==1.5.5.1
