@@ -410,7 +410,7 @@ def injection_campaign(circuits, device_backends=None, noise_models=None, inject
                                                                     "device_backend":device_backend, "noise_model":noise_model, "shots":int(shots_per_time_batch), "execution_type":"injection"}
 
     if processes == 1:
-        for p_index, args in deepcopy(subprocess_args.items()):
+        for p_index, args in deepcopy(subprocess_args).items():
             subprocess_args[p_index]["counts"] = run_injection(**args)
     else:
         command = ['python3', './asuqa/subprocess_run_injection.py']

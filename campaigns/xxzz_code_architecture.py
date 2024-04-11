@@ -23,12 +23,12 @@ def main():
     n_nodes = 1
     max_qubits = 30
     max_cores = 12 * n_nodes
+    processes = 1
     max_gpu_memory = 64 * n_nodes #GB
     gpu_limit = int( (max_gpu_memory*1024**3)/((2**max_qubits)*16) )
     use_gpu = True
-    processes = min(max_cores, gpu_limit, n_quantised_steps)
-    if not use_gpu and (processes > n_quantised_steps or processes > max_cores):
-        processes = min(n_quantised_steps+1, max_cores)
+    if use_gpu:
+        processes = min(max_cores, gpu_limit)
   
     ################################################################### Hardware architecture analysis ##################################################################
     ts = time()
