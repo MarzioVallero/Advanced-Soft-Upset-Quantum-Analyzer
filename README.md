@@ -48,11 +48,11 @@ ASUQA is always updated according to the last major release of `qiskit` and `qis
 
 # <a name="how-use-ASUQA"></a>How do I use ASUQA?
 
-Refer to the tutorial files.
+Refer to the example campaign files in the "campaigns" directory.
 
 # <a name="how-ASUQA-works"></a>How does ASUQA work?
 
-TBD
+Refer to the original paper by the authors, which is currently under review.
 
 # <a name="how-cite-ASUQA"></a>How do I cite ASUQA?
 
