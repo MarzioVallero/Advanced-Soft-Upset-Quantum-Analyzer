@@ -9,6 +9,7 @@ from math import exp, inf
 import networkx as nx
 from subprocess import Popen, PIPE, STDOUT
 import tqdm
+import os
 from qiskit import transpile, QuantumCircuit
 from qiskit import Aer
 from qiskit.exceptions import QiskitError

@@ -1,4 +1,4 @@
-from .imports import *
+from imports import *
 
 def CustomBackend(active_qubits=list(range(30)), coupling_map=mesh_edge_list, backend_name="Mesh"):
     """Custom backend that uses the noise profile of FakeBrooklyn and maps it to a custom coupling map. 
@@ -413,7 +413,7 @@ def injection_campaign(circuits, device_backends=None, noise_models=None, inject
         for p_index, args in deepcopy(subprocess_args).items():
             subprocess_args[p_index]["counts"] = run_injection(**args)
     else:
-        command = ['python3', './asuqa/subprocess_run_injection.py']
+        command = ['python3', os.path.dirname(os.path.abspath(__file__)) + '/subprocess_run_injection.py']
         process_output_list = subprocess_pool(command=command, args_dict=subprocess_args, max_processes=processes)
         for p_index, counts in process_output_list:
             subprocess_args[p_index]["counts"] = counts
