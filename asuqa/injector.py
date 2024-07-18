@@ -20,8 +20,10 @@ def CustomBackend(active_qubits=list(range(30)), coupling_map=mesh_edge_list, ba
 
     qubit_properties_backend = ibm_device_backend.properties()
     # single_qubit_gates = set(ibm_device_backend.configuration().basis_gates).intersection(NoiseModel()._1qubit_instructions)
-    single_qubit_gates = set(get_standard_gate_name_mapping().keys())
-    single_qubit_gates.add("reset")
+    single_qubit_gates = list(set(get_standard_gate_name_mapping().keys()).intersection(NoiseModel()._1qubit_instructions))
+    single_qubit_gates.append("reset")
+    single_qubit_gates.append("measure")
+    single_qubit_gates.append("cx")
     # single_qubit_gates.add("measure")
 
     qubit_t1 = [item[0] for q_index, item in enumerate(thermal_relaxation_values(qubit_properties_backend)) if q_index in range(n_qubits)]

@@ -41,8 +41,7 @@ def plot_transient(result_df, compare_function):
     
     circuit_name = re.sub("[^a-zA-Z]", "", df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/transient_error_over_time_{compare_function.__name__}_{circuit_name} on {df["device_backend_name"].iloc[0]}'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
+    Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
     plt.savefig(filename, bbox_inches='tight')
     plt.close()
     plt.clf()
@@ -89,8 +88,7 @@ def plot_spatial_spread_analysis(result_df, compare_function, subgroup_sizes):
 
     circuit_name = re.sub("[^a-zA-Z]", "", merged_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/histogram_spread_depth_error_{compare_function.__name__}_{circuit_name} on {merged_df["device_backend_name"].iloc[0]}.pdf'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
+    Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
     plt.savefig(filename, bbox_inches='tight')
     plt.close()
     plt.clf()
@@ -141,8 +139,7 @@ def plot_noise_radiation_analysis(result_df, compare_function, ip=1):
 
     circuit_name = re.sub("[^a-zA-Z]", "", result_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/3d_surfaceplot_{compare_function.__name__}_{circuit_name} on {result_df["device_backend_name"].iloc[0]}.pdf'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
+    Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
     plt.savefig(filename)
     plt.close()
     plt.clf()
@@ -219,8 +216,7 @@ def plot_architecture_analysis(result_df, compare_function):
     
     circuit_name = re.sub("[^a-zA-Z]", "", result_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/topology_injection_point_{compare_function.__name__}_{circuit_name} on {result_df["device_backend_name"].iloc[0]}.pdf'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
+    Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
     plt.savefig(filename, bbox_inches='tight')
     plt.close()
     plt.clf()
@@ -276,8 +272,7 @@ def plot_code_distance_analysis(result_df, compare_function_generator):
 
     circuit_name = re.sub("[^a-zA-Z]", "", merged_df["circuit_name"].iloc[0])
     filename = f'plots/{circuit_name}/min_injected_qubits_{compare_function.__name__}_{circuit_name} on {merged_df["device_backend_name"].iloc[0]}.pdf'
-    if not isdir(dirname(filename)):
-        mkdir(dirname(filename))
+    Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
     plt.savefig(filename, bbox_inches='tight')
     plt.close()
     plt.clf()

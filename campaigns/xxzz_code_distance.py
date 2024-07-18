@@ -9,7 +9,7 @@ def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
     log(f"Running code distance campaign on XXZZ Qubit")
-    read_from_file = False
+    read_from_file = True
 
     ##################################################################### Transient error controls #####################################################################
     transient_error_function = reset_to_zero
@@ -30,6 +30,7 @@ def main():
 
     ###################################################################### Code distance analysis ######################################################################
     ts = time()
+    spread_depth = 0
     physical_error = 0.01
     lattice_sizes = [(1,3), (3,1), (3,3), (3,5), (5,3)]
     circuit = xxzz_qubit(d=lattice_sizes[-1]).circ
@@ -46,7 +47,7 @@ def main():
             n_qubits = t_circuit.num_qubits
             coupling_map = device_backend.configuration().coupling_map
 
-            for spread_depth, group_size in [(0,1)]:
+            for spread_depth, group_size in [(0,1), (10,1), (0,int(n_qubits/2))]:
                 injection_points = get_some_connected_subgraphs(nx.Graph(coupling_map), group_size)
 
                 result_df = injection_campaign(circuits=t_circuit,
