@@ -35,7 +35,9 @@ for i, (name, (cm, graph)) in enumerate(graphs.items()):
     pos = nx.spring_layout(graph, weight=0.0001, iterations=1000, threshold=0.00001)
     nx.draw_networkx(graph, pos=pos, with_labels=True, ax=ax[ix])
     ax[ix].set_title(name, fontsize=30)
-plt.savefig(f"../plots/extra/architectures.pdf")
+filename = f"plots/extra/architectures.pdf"
+Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
+plt.savefig(filename)
 plt.close()
 
 # %% Get total number of shots in the ./results folder
@@ -46,7 +48,7 @@ from os import listdir
 from os.path import isfile, join
 from utils import *
 
-results_path = "../results"
+results_path = "results"
 file_paths = [join(results_path, f) for f in listdir(results_path) if isfile(join(results_path, f))]
 
 tot_shots = 0
@@ -58,7 +60,7 @@ for file_path in file_paths:
     tot_shots += df_tot_shots
     tot_simulations += len(result_df)
 
-print(tot_shots, tot_simulations)
+print(f"Total number of shots in ./results: {tot_shots}.\nTotal number of simulations in  ./results: {tot_simulations}")
 
 # %% Plot repetition circuit and DAG
 from utils import *
@@ -67,11 +69,13 @@ from qiskit.transpiler.passes import RemoveBarriers
 
 q2 = xxzz_qubit(d=(5,1))
 circ = q2.circ
-circ.draw(output="mpl", fold=170, filename='../plots/extra/repetition_5.pdf')
+filename='./plots/extra/repetition_5.pdf'
+Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
+circ.draw(output="mpl", fold=170, filename=filename)
 
 circ = RemoveBarriers()(circ)
 dag = circuit_to_dag(circ)
-dag.draw(filename='../plots/extra/repetition_5_DAG.pdf')
+dag.draw(filename='./plots/extra/repetition_5_DAG.pdf')
 
 # %% Plot XXZZ circuit and DAG
 from utils import *
@@ -80,11 +84,13 @@ from qiskit.transpiler.passes import RemoveBarriers
 
 q2 = xxzz_qubit(d=(3,3))
 circ = q2.circ
-circ.draw(output="mpl", fold=170, filename='../plots/extra/xxzz_3.pdf')
+filename='./plots/extra/xxzz_3.pdf'
+Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
+circ.draw(output="mpl", fold=170, filename=filename)
 
 circ = RemoveBarriers()(circ)
 dag = circuit_to_dag(circ)
-dag.draw(filename='../plots/extra/xxzz_3_DAG.pdf')
+dag.draw(filename='./plots/extra/xxzz_3_DAG.pdf')
 
 # %% Plot spatial distribution of error
 import os, sys
@@ -118,7 +124,9 @@ ax.set_xlabel('distance [a.u.]', labelpad=20)
 ax.set_ylabel('distance [a.u.]', labelpad=20)
 ax.set_zlabel('injection probability', labelpad=-40)
 plt.tight_layout()
-plt.savefig(f"../plots/extra/spatial_square_damping.pdf")
+filename = f"plots/extra/spatial_square_damping.pdf"
+Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
+plt.savefig(filename)
 plt.close()
 
 # %% Plot the temporal decay function
@@ -147,19 +155,21 @@ ax.set_ylabel('injection probability', labelpad=0)
 plt.legend(title='', loc='upper right')
 
 plt.tight_layout()
-plt.savefig(f"../plots/extra/temporal_decay.pdf")
+filename = f"plots/extra/temporal_decay.pdf"
+Path(dirname(filename)).mkdir(parents=True, exist_ok=True)
+plt.savefig(filename)
 plt.close()
 
 # %% Get time required to execute a surface code shot
 from utils import *
 from qiskit.providers.fake_provider import FakeBrooklyn
 
+print("Real-time duration of different circuits.")
 data = {"rq5":repetition_qubit(d=5), "rq25":repetition_qubit(d=25), "xxzz3":xxzz_qubit(d=3), "xxzz5":xxzz_qubit(d=5)}
 backend = FakeBrooklyn()
 
 for name, circ in data.items():
     t_circ = transpile(circ.circ, backend, scheduling_method='asap', seed_transpiler=42)
     shot_time = get_shot_execution_time_ns(t_circ)
-    print(f"{name}: {shot_time} ns")
-    print(f"{name}: {shot_time/10e3} mus")
     print(f"{name}: {shot_time/10e6} ms")
+# %%

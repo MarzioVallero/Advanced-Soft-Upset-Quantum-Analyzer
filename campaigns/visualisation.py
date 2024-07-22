@@ -183,7 +183,7 @@ def plot_architecture_analysis(result_df, compare_function):
     # drawing nodes and edges separately so we can capture collection for colobar
     for i, (name, G, p2v_map) in enumerate(graphs_with_data):
         ix = np.unravel_index(i, ax.shape)
-        pos = nx.nx_agraph.graphviz_layout(G, prog="neato", args="-Gepsilon=.00000000001 -Glen=200 -Gmaxiter=100 -Goverlap_scaling=20 -Goverlap='false' -Gsep=+50") if name!="linear" else nx.spiral_layout(G, equidistant=True)
+        pos = nx.kamada_kawai_layout(G) if name!="linear" else nx.spiral_layout(G, equidistant=True)
         ec = nx.draw_networkx_edges(G, pos, alpha=0.4, ax=ax[ix])
         colors = nx.get_node_attributes(G, "logical_error")
 

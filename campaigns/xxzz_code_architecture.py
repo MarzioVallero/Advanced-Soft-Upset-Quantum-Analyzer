@@ -8,7 +8,7 @@ from visualisation import *
 def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
-    log(f"Running hardware architecture campaign on XXZZ Qubit")
+    log(f"Architecture campaign on XXZZ Qubit")
     read_from_file = True
 
     ##################################################################### Transient error controls #####################################################################
@@ -70,6 +70,7 @@ def main():
         tested_topolgies.append(reduced_topology)
 
     if not read_from_file:
+        log(f"Generating dataset")
         ts = time()
         result_df = injection_campaign(circuits=args_dict_of_lists["circuits"], 
                                        device_backends=args_dict_of_lists["device_backends"],
@@ -86,6 +87,7 @@ def main():
         with bz2.BZ2File(f"./results/{circuit.name} architecture_analysis", 'wb') as handle:
             pickle.dump(result_df, handle)
     else:
+        log(f"Reading stored dataset")
         with bz2.BZ2File(f"./results/{circuit.name} architecture_analysis", 'rb') as handle:
             result_df = pickle.load(handle)
     plot_architecture_analysis(result_df, compare_error_function)

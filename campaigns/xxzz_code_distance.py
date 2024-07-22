@@ -8,7 +8,7 @@ from visualisation import *
 def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
-    log(f"Running code distance campaign on XXZZ Qubit")
+    log(f"Code distance campaign on XXZZ Qubit")
     read_from_file = True
 
     ##################################################################### Transient error controls #####################################################################
@@ -36,6 +36,7 @@ def main():
     circuit = xxzz_qubit(d=lattice_sizes[-1]).circ
 
     if not read_from_file:
+        log(f"Generating dataset")
         list_result_df = []
         for d in lattice_sizes:
             qt_object = xxzz_qubit(d=d)
@@ -66,6 +67,7 @@ def main():
         with bz2.BZ2File(f"./results/{circuit.name} sd{spread_depth} code_distance_analysis", 'wb') as handle:
             pickle.dump(concatenated_df, handle)
     else:
+        log(f"Reading stored dataset")
         with bz2.BZ2File(f"./results/{circuit.name} sd{spread_depth} code_distance_analysis", 'rb') as handle:
             concatenated_df = pickle.load(handle)
     plot_code_distance_analysis(concatenated_df, get_decoded_logical_error_xxzz)

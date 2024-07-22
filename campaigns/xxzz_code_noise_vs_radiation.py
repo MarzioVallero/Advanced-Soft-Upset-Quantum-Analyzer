@@ -8,7 +8,7 @@ from visualisation import *
 def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
-    log(f"Running noise vs. radiation-induced faults campaign on XXZZ Qubit")
+    log(f"Noise vs. radiation-induced faults campaign on XXZZ Qubit")
     read_from_file = True
 
     ##################################################################### Transient error controls #####################################################################
@@ -47,6 +47,7 @@ def main():
         args_dict_of_lists["noise_models"].append(noise_model)
 
     if not read_from_file:
+        log(f"Generating dataset")
         ts = time()
         result_df = injection_campaign(circuits=args_dict_of_lists["circuits"],
                                             device_backends=args_dict_of_lists["device_backends"],
@@ -63,6 +64,7 @@ def main():
         with bz2.BZ2File(f"./results/{circuit.name} noise_radiation_analysis", 'wb') as handle:
             pickle.dump(result_df, handle)
     else:
+        log(f"Reading stored dataset")
         with bz2.BZ2File(f"./results/{circuit.name} noise_radiation_analysis", 'rb') as handle:
             result_df = pickle.load(handle)
     plot_noise_radiation_analysis(result_df, compare_error_function, ip=10)

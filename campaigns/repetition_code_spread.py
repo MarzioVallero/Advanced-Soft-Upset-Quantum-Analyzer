@@ -8,7 +8,7 @@ from visualisation import *
 def main():
     ts = time()
     log(f"Job started at {datetime.fromtimestamp(ts)}.")
-    log(f"Running spreading fault vs. erasure fault on Repetition Qubit")
+    log(f"Spreading fault vs. erasure fault on Repetition Qubit")
     read_from_file = True
 
     ##################################################################### Transient error controls #####################################################################
@@ -39,6 +39,7 @@ def main():
     device_backends = [CustomBackend(active_qubits=range(circuit.num_qubits), coupling_map=mesh_edge_list, backend_name="Mesh")]
     
     if not read_from_file:
+        log(f"Generating dataset")
         spread_depth_list_dict = []
         for device_backend in device_backends:
             t_circuit = transpile(circuit, device_backend, scheduling_method='asap', seed_transpiler=42)
@@ -62,6 +63,7 @@ def main():
         with bz2.BZ2File(f"./results/{circuit.name} spatial_spread_analysis", 'wb') as handle:
             pickle.dump(concatenated_df, handle)
     else:
+        log(f"Reading stored dataset")
         with bz2.BZ2File(f"./results/{circuit.name} spatial_spread_analysis", 'rb') as handle:
             concatenated_df = pickle.load(handle)
     plot_spatial_spread_analysis(concatenated_df, compare_error_function, subgroup_sizes=[1, 10, 11, 15, 16])
